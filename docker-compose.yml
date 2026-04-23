@@ -1,0 +1,201 @@
+services:
+  # =========================================================
+  # Base infra (always on)
+  # =========================================================
+
+  postgres:
+    image: postgres:16
+    container_name: afa-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - afa
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: afa-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      # qdrant image has bash but no curl/wget/nc — use bash /dev/tcp probe on the HTTP port.
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - afa
+
+  # =========================================================
+  # Observability stack (profile: observability)
+  # =========================================================
+
+  langfuse-postgres:
+    image: postgres:16
+    container_name: afa-langfuse-postgres
+    restart: unless-stopped
+    profiles: ["observability"]
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: ${LANGFUSE_DB:-langfuse}
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d ${LANGFUSE_DB:-langfuse}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - afa
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: afa-clickhouse
+    restart: unless-stopped
+    profiles: ["observability"]
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - afa
+
+  minio:
+    image: minio/minio:latest
+    container_name: afa-minio
+    restart: unless-stopped
+    profiles: ["observability"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - afa
+
+  redis:
+    image: redis:7-alpine
+    container_name: afa-redis
+    restart: unless-stopped
+    profiles: ["observability"]
+    command: redis-server --requirepass ${REDIS_AUTH}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - afa
+
+  langfuse-web:
+    image: langfuse/langfuse:3
+    container_name: afa-langfuse-web
+    restart: unless-stopped
+    profiles: ["observability"]
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/${LANGFUSE_DB:-langfuse}
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      NEXTAUTH_URL: ${LANGFUSE_HOST}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_INIT_ORG_ID: local
+      LANGFUSE_INIT_PROJECT_ID: afa
+      LANGFUSE_S3_EVENT_UPLOAD_ENABLED: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_AUTH: ${REDIS_AUTH}
+    networks:
+      - afa
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: afa-langfuse-worker
+    restart: unless-stopped
+    profiles: ["observability"]
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/${LANGFUSE_DB:-langfuse}
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_ENABLED: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_AUTH: ${REDIS_AUTH}
+    networks:
+      - afa
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  langfuse_postgres_data:
+  clickhouse_data:
+  minio_data:
+  redis_data:
+
+networks:
+  afa:
+    driver: bridge
