@@ -38,6 +38,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.7",
+    "faker>=33",
 ]
 
 [tool.ruff]
