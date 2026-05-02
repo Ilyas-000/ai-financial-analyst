@@ -12,6 +12,9 @@ dependencies = [
     # Vector / retrieval
     "qdrant-client>=1.12",
     "sentence-transformers>=3.2",
+    "FlagEmbedding>=1.3",
+    "langchain-text-splitters>=0.3",
+    "python-frontmatter>=1.1",
     "tiktoken>=0.8",
     # SQL / DB
     "sqlalchemy[asyncio]>=2.0",
