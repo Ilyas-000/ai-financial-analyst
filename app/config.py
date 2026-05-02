@@ -19,9 +19,9 @@ class Settings(BaseSettings):
     # --- LLM (Ollama) ---
     # Host default. Override if the app is containerized later.
     ollama_base_url: str = "http://localhost:11434"
-    llm_supervisor_model: str = "qwen2.5:7b-instruct"
-    llm_specialist_model: str = "qwen2.5:7b-instruct"
-    llm_writer_model: str = "qwen2.5:7b-instruct"
+    llm_supervisor_model: str = "qwen2.5:3b-instruct"
+    llm_specialist_model: str = "qwen2.5:3b-instruct"
+    llm_writer_model: str = "qwen2.5:3b-instruct"
     llm_request_timeout: int = 120
 
     # --- Postgres (app data) ---
@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # --- Embeddings / Reranker ---
     embedding_model: str = "BAAI/bge-m3"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    enable_rerank: bool = True
 
     # --- FX ---
     fx_base_url: str = "https://open.er-api.com/v6/latest"
@@ -49,6 +50,10 @@ class Settings(BaseSettings):
     # --- RAG ---
     chunk_size: int = 512
     chunk_overlap: int = 64
+    retrieval_top_k_dense: int = 20
+    retrieval_top_k_sparse: int = 20
+    rerank_input_top_k: int = 20
+    rerank_output_top_k: int = 5
 
     # --- Langfuse (client side) ---
     enable_langfuse: bool = False
