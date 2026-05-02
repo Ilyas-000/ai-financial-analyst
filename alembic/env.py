@@ -1,9 +1,4 @@
-"""Alembic async environment.
-
-The DB URL is sourced from ``app.config.get_settings().app_database_url`` —
-``alembic.ini`` deliberately leaves ``sqlalchemy.url`` unset so we have a
-single source of truth (``.env`` → ``Settings`` → here).
-"""
+"""Alembic async environment."""
 
 import asyncio
 from logging.config import fileConfig
@@ -21,7 +16,6 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Inject the URL from application settings.
 config.set_main_option("sqlalchemy.url", get_settings().app_database_url)
 
 target_metadata = Base.metadata

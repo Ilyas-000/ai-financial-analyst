@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment / .env file."""
+    """Application settings."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -17,9 +17,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # --- LLM (Ollama) ---
-    # Default targets Ollama on the host; the app also runs on the host
-    # (uv + Chainlit). If containerised later, override via env to
-    # `http://host.docker.internal:11434`.
+    # Host default. Override if the app is containerized later.
     ollama_base_url: str = "http://localhost:11434"
     llm_supervisor_model: str = "qwen2.5:7b-instruct"
     llm_specialist_model: str = "qwen2.5:7b-instruct"

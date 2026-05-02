@@ -1,9 +1,4 @@
-"""Async SQLAlchemy engine + sessionmaker factories.
-
-Both factories are lru-cached so they behave like singletons inside the
-process while still being easy to override in tests (clear the cache and
-re-import). The pattern mirrors ``app.config.get_settings``.
-"""
+"""Async SQLAlchemy factories."""
 
 from functools import lru_cache
 
@@ -19,7 +14,7 @@ from app.config import get_settings
 
 @lru_cache(maxsize=1)
 def get_engine() -> AsyncEngine:
-    """Return the process-wide async engine bound to the application database."""
+    """Build the cached async engine."""
     settings = get_settings()
     return create_async_engine(
         settings.app_database_url,
@@ -32,7 +27,7 @@ def get_engine() -> AsyncEngine:
 
 @lru_cache(maxsize=1)
 def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    """Return the process-wide async sessionmaker."""
+    """Build the cached async sessionmaker."""
     return async_sessionmaker(
         bind=get_engine(),
         expire_on_commit=False,

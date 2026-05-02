@@ -1,25 +1,4 @@
-"""SQLAlchemy 2.x models for the AI Financial Analyst (multi-tenant partner portal).
-
-Tenancy posture
----------------
-The deployment is multi-tenant: one instance hosted by the BaaS operator serves
-many partner companies (tenants). Tables fall into two groups:
-
-* **Tenancy-aware** — every row carries ``company_id``. The SQL guard injects
-  ``WHERE company_id = <authenticated_user.company_id>`` automatically; the
-  value is **never** taken from LLM input. Tables: ``employees``, ``cards``,
-  ``transactions``, ``payouts``, ``payout_recipients``, ``limits``,
-  ``tariffs``, ``tariff_rules``, ``report_snapshots``, ``audit_log``.
-* **Shared** — operator-wide reference data, no ``company_id``. Tables:
-  ``companies``, ``categories``, ``reason_codes``, ``currency_rates``,
-  ``ingestion_state``.
-
-Every ``company_id`` column is indexed to match the dominant access pattern
-(filter-by-tenant + secondary attribute).
-
-Column comments are in English so the schema retriever (in I-04) can ground
-SQL generation on them directly.
-"""
+"""SQLAlchemy models for shared and tenancy-aware data."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -40,11 +19,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-# Tenant-id column documentation — repeated identically on every tenancy-aware
-# table so the schema retriever surfaces the contract uniformly.
+# Reused on every tenancy-aware table.
 TENANT_ID_COMMENT = (
-    "tenant identifier; SQL guard injects from authenticated user, "
-    "never from LLM input"
+    "tenant identifier; SQL guard injects from authenticated user, never from LLM input"
 )
 
 
@@ -52,13 +29,8 @@ class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
 
 
-# ---------------------------------------------------------------------------
-# Shared (operator-wide) tables
-# ---------------------------------------------------------------------------
-
-
 class Company(Base):
-    """Client-company (tenant). Shared table — referenced by every tenancy-aware row."""
+    """Partner company."""
 
     __tablename__ = "companies"
     __table_args__ = (
@@ -82,7 +54,7 @@ class Company(Base):
 
 
 class Category(Base):
-    """Spending category (hierarchical via self-FK on ``parent``)."""
+    """Spending category."""
 
     __tablename__ = "categories"
     __table_args__ = {"comment": "Spending categories. Shared reference data."}
@@ -98,7 +70,7 @@ class Category(Base):
 
 
 class ReasonCode(Base):
-    """Reason code attached to outgoing transactions / payouts."""
+    """Reason code."""
 
     __tablename__ = "reason_codes"
     __table_args__ = {"comment": "Reason codes (operational classifiers). Shared reference data."}
@@ -114,7 +86,7 @@ class ReasonCode(Base):
 
 
 class CurrencyRate(Base):
-    """Daily FX rate snapshot (composite PK base+quote+date)."""
+    """Daily FX rate."""
 
     __tablename__ = "currency_rates"
     __table_args__ = (
@@ -132,13 +104,11 @@ class CurrencyRate(Base):
     rate: Mapped[Decimal] = mapped_column(
         Numeric(18, 8), nullable=False, comment="1 unit of base = rate units of quote"
     )
-    source: Mapped[str] = mapped_column(
-        String(50), nullable=False, comment="upstream provider id"
-    )
+    source: Mapped[str] = mapped_column(String(50), nullable=False, comment="upstream provider id")
 
 
 class IngestionState(Base):
-    """RAG ingestion bookkeeping — tracks which documents are indexed in Qdrant."""
+    """RAG ingestion state."""
 
     __tablename__ = "ingestion_state"
     __table_args__ = {"comment": "RAG ingestion bookkeeping. Shared (operator-wide)."}
@@ -151,11 +121,6 @@ class IngestionState(Base):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-# ---------------------------------------------------------------------------
-# Tenancy-aware tables (every row carries company_id)
-# ---------------------------------------------------------------------------
 
 
 class Employee(Base):
@@ -206,9 +171,7 @@ class Card(Base):
     limit_monthly: Mapped[Decimal] = mapped_column(
         Numeric(15, 2), nullable=False, comment="monthly spending limit in card currency"
     )
-    currency: Mapped[str] = mapped_column(
-        String(3), nullable=False, comment="ISO 4217 code"
-    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, comment="ISO 4217 code")
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -278,9 +241,7 @@ class PayoutRecipient(Base):
         nullable=False,
         comment=TENANT_ID_COMMENT,
     )
-    type: Mapped[str] = mapped_column(
-        String(20), nullable=False, comment="individual | company"
-    )
+    type: Mapped[str] = mapped_column(String(20), nullable=False, comment="individual | company")
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     inn: Mapped[str | None] = mapped_column(
         String(12), nullable=True, comment="Russian taxpayer id; sensitive — restricted columns"
@@ -301,8 +262,7 @@ class Payout(Base):
         ),
         {
             "comment": (
-                "Outgoing payouts "
-                "(vendor / contractor / employee reimbursements). Tenancy-aware."
+                "Outgoing payouts (vendor / contractor / employee reimbursements). Tenancy-aware."
             )
         },
     )
@@ -373,15 +333,13 @@ class Limit(Base):
 
 
 class Tariff(Base):
-    """Operator-side tariff plan a partner company is signed up to."""
+    """Tariff plan."""
 
     __tablename__ = "tariffs"
     __table_args__ = (
         Index("ix_tariffs_company_id", "company_id"),
         Index("ix_tariffs_company_status", "company_id", "status"),
-        CheckConstraint(
-            "status in ('active','inactive','draft')", name="ck_tariffs_status"
-        ),
+        CheckConstraint("status in ('active','inactive','draft')", name="ck_tariffs_status"),
         {"comment": "Operator tariff plans assigned to partner companies. Tenancy-aware."},
     )
 
@@ -410,7 +368,7 @@ class Tariff(Base):
 
 
 class TariffRule(Base):
-    """Single fee rule belonging to a tariff (per operation type)."""
+    """Tariff rule."""
 
     __tablename__ = "tariff_rules"
     __table_args__ = (
@@ -462,7 +420,7 @@ class TariffRule(Base):
 
 
 class ReportSnapshot(Base):
-    """Snapshot of a periodic report produced for a partner company."""
+    """Periodic report snapshot."""
 
     __tablename__ = "report_snapshots"
     __table_args__ = (
@@ -504,7 +462,7 @@ class ReportSnapshot(Base):
 
 
 class AuditLog(Base):
-    """Audit trail for every SQL request the agent issues + cross-tenant incidents."""
+    """Audit log record."""
 
     __tablename__ = "audit_log"
     __table_args__ = (
