@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     rerank_input_top_k: int = 20
     rerank_output_top_k: int = 5
 
+    # --- SQL Analyst ---
+    sql_max_attempts: int = 3
+    sql_statement_timeout_ms: int = 5000
+    sql_default_limit: int = 1000
+    sql_max_limit: int = 10000
+
     # --- Langfuse (client side) ---
     enable_langfuse: bool = False
     langfuse_host: str = "http://localhost:3000"
