@@ -1,4 +1,4 @@
-.PHONY: help install lint format test up down up-obs down-obs logs ps migrate seed ingest eval eval-fast eval-rag
+.PHONY: help install lint format test up down up-obs down-obs logs ps migrate seed ingest run eval eval-fast eval-rag
 
 help:
 	@echo "Available targets:"
@@ -15,6 +15,7 @@ help:
 	@echo "  migrate     Apply alembic migrations"
 	@echo "  seed        Seed database with fixtures"
 	@echo "  ingest      Run RAG ingestion pipeline"
+	@echo "  run         Run FastAPI app via uvicorn (APP_HOST/APP_PORT from env)"
 	@echo "  eval        Run full eval suite"
 	@echo "  eval-fast   Run only route_accuracy"
 	@echo "  eval-rag    Run only RAGAS metrics"
@@ -60,6 +61,12 @@ seed:
 
 ingest:
 	uv run python -m app.rag.ingest
+
+# --- Run app ---
+APP_HOST ?= 0.0.0.0
+APP_PORT ?= 8000
+run:
+	uv run uvicorn app.main:app --host $(APP_HOST) --port $(APP_PORT)
 
 # --- Evaluation ---
 eval:

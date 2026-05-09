@@ -1,0 +1,107 @@
+"""FastAPI entrypoint.
+
+Owns the application lifespan (engine + Qdrant client warmup, engine dispose
+on shutdown), the chat router, and the operational ``/health`` / ``/ready``
+endpoints. Chainlit is mounted on top of this app in I-09 — the AI core
+itself never imports Chainlit.
+"""
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+import httpx
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+
+from app.api.routes import router as chat_router
+from app.api.schemas import ComponentStatus, ReadyResponse
+from app.config import get_settings
+from app.db.session import get_engine
+from app.rag.qdrant_store import get_qdrant_client
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_settings()
+    logging.basicConfig(
+        level=settings.log_level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    # Warm caches; do not fail startup on transient infra hiccups — /ready
+    # surfaces real component health.
+    get_engine()
+    get_qdrant_client()
+    logger.info("application started, env=%s", settings.app_env)
+    try:
+        yield
+    finally:
+        engine = get_engine()
+        await engine.dispose()
+        logger.info("application shutdown complete")
+
+
+app = FastAPI(
+    title="AI Financial Analyst",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+app.include_router(chat_router)
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+async def _check_postgres(timeout: float) -> ComponentStatus:
+    try:
+        engine = get_engine()
+        async with asyncio.timeout(timeout):
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        return ComponentStatus(ok=True)
+    except Exception as exc:
+        return ComponentStatus(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+
+async def _check_qdrant(timeout: float) -> ComponentStatus:
+    try:
+        client = get_qdrant_client()
+        async with asyncio.timeout(timeout):
+            await asyncio.to_thread(client.get_collections)
+        return ComponentStatus(ok=True)
+    except Exception as exc:
+        return ComponentStatus(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+
+async def _check_ollama(timeout: float) -> ComponentStatus:
+    settings = get_settings()
+    url = settings.ollama_base_url.rstrip("/") + "/api/tags"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+        return ComponentStatus(ok=True)
+    except Exception as exc:
+        return ComponentStatus(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+
+@app.get("/ready")
+async def ready():
+    settings = get_settings()
+    timeout = settings.ready_check_timeout_seconds
+    postgres, qdrant, ollama = await asyncio.gather(
+        _check_postgres(timeout),
+        _check_qdrant(timeout),
+        _check_ollama(timeout),
+    )
+    components = {"postgres": postgres, "qdrant": qdrant, "ollama": ollama}
+    overall_ok = all(c.ok for c in components.values())
+    body = ReadyResponse(ok=overall_ok, components=components).model_dump()
+    if not overall_ok:
+        return JSONResponse(status_code=503, content=body)
+    return body
