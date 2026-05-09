@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     # --- App ---
     app_env: str = "development"
     log_level: str = "INFO"
+    app_host: str = "0.0.0.0"
+    app_port: int = 8000
+
+    # --- Graph / LLM orchestration ---
+    llm_retry_backoff_seconds: float = 1.5
+    ready_check_timeout_seconds: float = 2.0
 
     # --- LLM (Ollama) ---
     # Host default. Override if the app is containerized later.
