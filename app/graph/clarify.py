@@ -8,7 +8,7 @@ user replies with a more specific question on the next turn.
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.graph.llm import invoke_llm, make_llm
+from app.graph.llm import FINAL_ANSWER_TAG, invoke_llm, make_llm
 from app.graph.prompts import load_two_section_prompt
 from app.graph.state import AgentState, effective_question
 from app.rag.tenants import tenant_slug_for
@@ -25,7 +25,8 @@ async def clarify_node(state: AgentState) -> AgentState:
         reasoning=state.get("route_reasoning") or "ambiguous question",
     )
 
-    llm = make_llm("writer")
+    # ``final_answer`` tag — see ``app/graph/direct_answer.py``.
+    llm = make_llm("writer", tags=[FINAL_ANSWER_TAG])
     response = await invoke_llm(llm, [SystemMessage(system_prompt), HumanMessage(user_prompt)])
     answer = str(response.content).strip()
     return {

@@ -21,7 +21,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.graph.llm import invoke_llm, make_llm
+from app.graph.llm import FINAL_ANSWER_TAG, invoke_llm, make_llm
 from app.graph.prompts import load_two_section_prompt
 from app.graph.state import AgentState, effective_question
 from app.tools.draft_action_builder import (
@@ -108,7 +108,10 @@ async def _synthesise_combined(*, question: str, sql_summary: str, docs_summary:
         sql_summary=sql_summary,
         docs_summary=docs_summary,
     )
-    llm = make_llm("writer")
+    # ``final_answer`` tag — Chainlit streams this LLM's tokens in route=both.
+    # In single-source paths Finalize doesn't call an LLM at all (specialist
+    # tokens are streamed instead — see sql_analyst / docs_researcher).
+    llm = make_llm("writer", tags=[FINAL_ANSWER_TAG])
     response = await invoke_llm(llm, [SystemMessage(system_template), HumanMessage(user_prompt)])
     return str(response.content).strip()
 

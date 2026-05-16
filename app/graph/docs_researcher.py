@@ -20,6 +20,7 @@ from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 
 from app.config import get_settings
+from app.graph.llm import FINAL_ANSWER_TAG
 from app.rag.reranker import rerank_async
 from app.rag.retriever import RetrievedChunk, hybrid_search
 from app.rag.tenants import tenant_slug_for
@@ -114,7 +115,8 @@ async def _summarize_node(state: DocsResearcherState) -> DocsResearcherState:
         model=settings.llm_specialist_model,
         temperature=0,
         timeout=settings.llm_request_timeout,
-    )
+        streaming=True,
+    ).with_config({"tags": [FINAL_ANSWER_TAG]})
     response = await llm.ainvoke(
         [SystemMessage(system_prompt), HumanMessage(user_prompt)]
     )

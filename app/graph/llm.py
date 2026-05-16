@@ -1,8 +1,19 @@
 """LLM factory and a transient-retry wrapper.
 
 Single source of truth for ``ChatOllama`` construction in I-06+ nodes
-(Supervisor / DirectAnswer / Clarify / Finalize). Existing subgraphs keep
-their own factories until a future cleanup pass.
+(Supervisor / DirectAnswer / Clarify / Finalize / Condense). Existing
+subgraphs (``sql_analyst`` / ``docs_researcher``) still build their own
+``ChatOllama`` instances inline (TD-04); they tag the answer-producing call
+directly via ``with_config`` so streaming events surface to the UI.
+
+Two pieces of plumbing matter for the I-09 UI:
+
+* ``streaming=True`` on ``ChatOllama`` makes ``astream_events`` yield
+  ``on_chat_model_stream`` chunks instead of one whole AIMessage at the end;
+  ``ainvoke`` still works the same way (it just collects the chunks).
+* ``tags=["final_answer"]`` marks the LLM call whose tokens the UI should
+  stream to the user. Chainlit subscribes to events with that tag — see
+  ``app/services/chat_service.py`` and ``app/ui/chainlit_app.py``.
 
 ``invoke_llm`` performs one bounded retry on transient errors
 (timeout / connection / 5xx) with a short backoff. Anything that survives the
@@ -17,6 +28,7 @@ from typing import Literal
 
 import httpx
 from langchain_core.messages import BaseMessage
+from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
 
 from app.config import get_settings
@@ -25,24 +37,37 @@ logger = logging.getLogger(__name__)
 
 LLMRole = Literal["supervisor", "specialist", "writer"]
 
+LLMRunnable = Runnable[Sequence[BaseMessage], BaseMessage]
+
+FINAL_ANSWER_TAG = "final_answer"
+
 
 class LLMUnavailableError(RuntimeError):
     """LLM service didn't respond after the bounded retry."""
 
 
-def make_llm(role: LLMRole, *, temperature: float = 0.0) -> ChatOllama:
+def make_llm(
+    role: LLMRole,
+    *,
+    temperature: float = 0.0,
+    tags: Sequence[str] | None = None,
+) -> LLMRunnable:
     settings = get_settings()
     model = {
         "supervisor": settings.llm_supervisor_model,
         "specialist": settings.llm_specialist_model,
         "writer": settings.llm_writer_model,
     }[role]
-    return ChatOllama(
+    llm = ChatOllama(
         base_url=settings.ollama_base_url,
         model=model,
         temperature=temperature,
         timeout=settings.llm_request_timeout,
+        streaming=True,
     )
+    if tags:
+        return llm.with_config({"tags": list(tags)})
+    return llm
 
 
 def _is_transient(exc: BaseException) -> bool:
@@ -58,7 +83,7 @@ def _is_transient(exc: BaseException) -> bool:
     )
 
 
-async def invoke_llm(llm: ChatOllama, messages: Sequence[BaseMessage]) -> BaseMessage:
+async def invoke_llm(llm: LLMRunnable, messages: Sequence[BaseMessage]) -> BaseMessage:
     settings = get_settings()
     try:
         return await llm.ainvoke(list(messages))

@@ -9,8 +9,10 @@ in I-09 — the AI core itself never imports Chainlit.
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
+from chainlit.utils import mount_chainlit
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -115,3 +117,12 @@ async def ready():
     if not overall_ok:
         return JSONResponse(status_code=503, content=body)
     return body
+
+
+# Mount the Chainlit demo UI on /chat. The target file is loaded lazily by
+# Chainlit on first request; by then ``app.main`` (and ``app.state.graph``
+# inside lifespan) are fully initialised. The chainlit module is the ONLY
+# place that may import ``chainlit`` — see rules.md §2.1 and the invariant
+# test in tests/test_chainlit_isolation.py.
+_CHAINLIT_TARGET = str(Path(__file__).resolve().parents[1] / "app" / "ui" / "chainlit_app.py")
+mount_chainlit(app=app, target=_CHAINLIT_TARGET, path="/chat")

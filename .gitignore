@@ -37,6 +37,10 @@ eval/reports/
 *.log
 .cache/
 
+# Chainlit runtime files (uploads, translations cache)
+.files/
+.chainlit/translations/
+
 # Local-only project docs (not tracked)
 design.md
 plan.md

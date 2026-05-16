@@ -1,4 +1,4 @@
-.PHONY: help install lint format test up down up-obs down-obs logs ps migrate seed ingest run eval eval-fast eval-rag
+.PHONY: help install lint format test up down up-obs down-obs logs ps migrate seed ingest run ui eval eval-fast eval-rag
 
 help:
 	@echo "Available targets:"
@@ -16,6 +16,7 @@ help:
 	@echo "  seed        Seed database with fixtures"
 	@echo "  ingest      Run RAG ingestion pipeline"
 	@echo "  run         Run FastAPI app via uvicorn (APP_HOST/APP_PORT from env)"
+	@echo "  ui          Alias for 'run' — Chainlit UI is mounted on /chat"
 	@echo "  eval        Run full eval suite"
 	@echo "  eval-fast   Run only route_accuracy"
 	@echo "  eval-rag    Run only RAGAS metrics"
@@ -67,6 +68,9 @@ APP_HOST ?= 0.0.0.0
 APP_PORT ?= 8000
 run:
 	uv run uvicorn app.main:app --host $(APP_HOST) --port $(APP_PORT)
+
+# Convenience alias — Chainlit UI is mounted on /chat by the same FastAPI app.
+ui: run
 
 # --- Evaluation ---
 eval:

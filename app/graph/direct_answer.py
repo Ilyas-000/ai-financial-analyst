@@ -8,7 +8,7 @@ draft actions to attach.
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.graph.llm import invoke_llm, make_llm
+from app.graph.llm import FINAL_ANSWER_TAG, invoke_llm, make_llm
 from app.graph.prompts import load_two_section_prompt
 from app.graph.state import AgentState, effective_question
 from app.rag.tenants import tenant_slug_for
@@ -22,7 +22,9 @@ async def direct_answer_node(state: AgentState) -> AgentState:
     system_prompt = system_template.format(user_role=state["user_role"], tenant_slug=tenant_slug)
     user_prompt = user_template.format(question=effective_question(state))
 
-    llm = make_llm("writer")
+    # ``final_answer`` tag — this LLM produces the user-facing answer; the
+    # UI streams tokens from events with this tag.
+    llm = make_llm("writer", tags=[FINAL_ANSWER_TAG])
     response = await invoke_llm(llm, [SystemMessage(system_prompt), HumanMessage(user_prompt)])
     answer = str(response.content).strip()
     return {

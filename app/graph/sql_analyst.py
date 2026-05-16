@@ -28,6 +28,7 @@ from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 
 from app.config import get_settings
+from app.graph.llm import FINAL_ANSWER_TAG
 from app.tools.schema_introspect import schema_for_role
 from app.tools.sql_executor import (
     ExecutionResult,
@@ -87,6 +88,7 @@ def _make_llm() -> ChatOllama:
         model=settings.llm_specialist_model,
         temperature=0,
         timeout=settings.llm_request_timeout,
+        streaming=True,
     )
 
 
@@ -210,7 +212,10 @@ async def _interpret_node(state: SQLAnalystState) -> SQLAnalystState:
         rows_table=_render_rows_table(rows, _INTERPRET_ROW_CAP),
     )
     system_filled = system_prompt.format(user_role=state["user_role"])
-    llm = _make_llm()
+    # The interpret step produces the user-facing answer in single-source mode;
+    # tagging lets Chainlit stream its tokens. In route=both the parent
+    # Finalize-combined LLM is also tagged and its stream replaces this one.
+    llm = _make_llm().with_config({"tags": [FINAL_ANSWER_TAG]})
     response = await llm.ainvoke([SystemMessage(system_filled), HumanMessage(user_prompt)])
     return {"summary": str(response.content).strip(), "error": None}
 
