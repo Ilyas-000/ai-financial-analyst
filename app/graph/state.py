@@ -1,8 +1,9 @@
 """Parent graph state.
 
-Contract follows design.md §4 with two adjustments grounded in plan.md / I-06+I-07:
+Contract follows design.md §4 with adjustments grounded in plan.md / I-06–I-08:
 
-* ``route`` excludes ``"both"`` until I-08 (parallel execution lands there).
+* ``route="both"`` fans out to ``sql_analyst`` and ``docs_researcher`` in
+  parallel (I-08); Finalize joins both branches.
 * ``suggest_action_kind`` is a hint emitted by Supervisor that Finalize uses to
   build a ``suggested_action`` payload via ``draft_action_builder``.
 * ``messages`` accumulates across turns (``add_messages`` reducer) and is
@@ -16,7 +17,7 @@ from typing import Annotated, Any, Literal, TypedDict
 from langgraph.graph.message import add_messages
 
 UserRole = Literal["cfo", "finance_manager", "accountant", "auditor"]
-Route = Literal["sql_analyst", "docs_researcher", "direct_answer", "clarify"]
+Route = Literal["sql_analyst", "docs_researcher", "both", "direct_answer", "clarify"]
 SuggestActionKind = Literal["export_report", "open_ticket", "prepare_act", "highlight_discrepancy"]
 
 

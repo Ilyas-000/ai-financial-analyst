@@ -1,10 +1,11 @@
-"""Unit tests for the Supervisor JSON parser.
+"""Unit tests for the Supervisor JSON parser and the conditional-edge function.
 
-We only test ``parse_route`` (the pure parsing helper). The node itself is
-covered end-to-end via ``scripts/chat.py`` against a live Ollama instance.
+We only test the pure helpers (``parse_route``, ``route_from_state``). The node
+itself is covered end-to-end via ``scripts/chat.py`` against a live Ollama
+instance.
 """
 
-from app.graph.supervisor import parse_route
+from app.graph.supervisor import parse_route, route_from_state
 
 
 def test_parse_clean_json():
@@ -75,3 +76,30 @@ def test_parse_non_object_returns_none():
 def test_parse_malformed_json_returns_none():
     raw = '{"next": "sql_analyst", "reasoning": "broken"'
     assert parse_route(raw) is None
+
+
+def test_parse_both_route():
+    raw = (
+        '{"next": "both", "reasoning": "fact vs regulation comparison",'
+        ' "suggest_action_kind": null}'
+    )
+    route = parse_route(raw)
+    assert route is not None
+    assert route.next == "both"
+
+
+def test_route_from_state_fans_out_for_both():
+    out = route_from_state({"route": "both"})
+    assert out == ["sql_analyst", "docs_researcher"]
+
+
+def test_route_from_state_returns_single_key_for_other_routes():
+    assert route_from_state({"route": "sql_analyst"}) == "sql_analyst"
+    assert route_from_state({"route": "docs_researcher"}) == "docs_researcher"
+    assert route_from_state({"route": "direct_answer"}) == "direct_answer"
+    assert route_from_state({"route": "clarify"}) == "clarify"
+
+
+def test_route_from_state_defaults_to_clarify_when_missing():
+    assert route_from_state({}) == "clarify"
+    assert route_from_state({"route": None}) == "clarify"

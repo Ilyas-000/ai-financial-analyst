@@ -1,10 +1,12 @@
 """Compile the parent agent graph.
 
-Topology (I-07):
+Topology (I-08):
 
     START → condense_question → supervisor → conditional:
-        sql_analyst    → finalize → END
-        docs_researcher → finalize → END
+        sql_analyst                  ─┐
+        docs_researcher              ─┼→ finalize → END
+        both → {sql_analyst,         │
+                docs_researcher}     ─┘
         direct_answer  → END
         clarify        → END
 
@@ -12,7 +14,10 @@ The ``condense_question`` node rewrites a follow-up question into a
 standalone one using the prior turns persisted by the checkpointer, so
 supervisor and specialists keep their single-shot prompts unchanged.
 
-``route=both`` and parallel fan-out are scoped to I-08.
+For ``route="both"`` the conditional edge fans out into ``sql_analyst`` and
+``docs_researcher`` in parallel; both branches write into different state
+keys (``sql_result`` / ``docs_result``), so the join at ``finalize`` is safe.
+Finalize then uses a writer-LLM to synthesise the combined answer.
 
 The compiled graph is bound to a ``checkpointer`` so each run with a given
 ``thread_id`` resumes the conversation log. Production wires the real
@@ -46,12 +51,9 @@ def build_agent_graph(checkpointer=None):
     graph.add_conditional_edges(
         "supervisor",
         route_from_state,
-        {
-            "sql_analyst": "sql_analyst",
-            "docs_researcher": "docs_researcher",
-            "direct_answer": "direct_answer",
-            "clarify": "clarify",
-        },
+        # ``route_from_state`` may return either a single key or a list of keys
+        # (for ``route="both"``). LangGraph then fans out to all listed nodes.
+        ["sql_analyst", "docs_researcher", "direct_answer", "clarify"],
     )
     graph.add_edge("sql_analyst", "finalize")
     graph.add_edge("docs_researcher", "finalize")

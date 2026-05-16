@@ -30,7 +30,7 @@ _FORMAT_REMINDER = (
 
 
 class _Route(BaseModel):
-    next: Literal["sql_analyst", "docs_researcher", "direct_answer", "clarify"]
+    next: Literal["sql_analyst", "docs_researcher", "both", "direct_answer", "clarify"]
     reasoning: str = Field(min_length=1, max_length=500)
     suggest_action_kind: (
         Literal["export_report", "open_ticket", "prepare_act", "highlight_discrepancy"] | None
@@ -108,7 +108,13 @@ async def supervisor_node(state: AgentState) -> AgentState:
     }
 
 
-def route_from_state(state: AgentState) -> str:
-    """Conditional-edge function — picks the next node based on Supervisor output."""
+def route_from_state(state: AgentState) -> str | list[str]:
+    """Conditional-edge function — picks the next node(s) based on Supervisor output.
+
+    Returns a list when ``route == "both"`` so LangGraph fans out to both
+    specialists in parallel; their results are joined at ``finalize``.
+    """
     route = state.get("route") or "clarify"
+    if route == "both":
+        return ["sql_analyst", "docs_researcher"]
     return route
