@@ -16,7 +16,9 @@ import logging
 from datetime import date
 from typing import Any
 
-from app.graph.state import AgentState
+from langchain_core.messages import AIMessage
+
+from app.graph.state import AgentState, effective_question
 from app.tools.draft_action_builder import (
     DraftAction,
     DraftActionError,
@@ -63,7 +65,7 @@ def _build_action(state: AgentState) -> dict[str, Any] | None:
     today = date.today()
     period_start = today.replace(day=1)
     period_end = today
-    question = state.get("question", "").strip()
+    question = effective_question(state).strip()
     try:
         action: DraftAction
         if kind == "export_report":
@@ -117,4 +119,5 @@ def finalize_node(state: AgentState) -> AgentState:
         "final_answer": final_answer,
         "sources": sources,
         "suggested_action": suggested_action,
+        "messages": [AIMessage(content=final_answer)],
     }

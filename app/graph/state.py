@@ -1,13 +1,14 @@
 """Parent graph state.
 
-Contract follows design.md §4 with two adjustments grounded in plan.md / I-06:
+Contract follows design.md §4 with two adjustments grounded in plan.md / I-06+I-07:
 
 * ``route`` excludes ``"both"`` until I-08 (parallel execution lands there).
 * ``suggest_action_kind`` is a hint emitted by Supervisor that Finalize uses to
   build a ``suggested_action`` payload via ``draft_action_builder``.
-
-``messages`` is wired in now to keep the contract stable for I-07
-(PostgresSaver + multi-turn); I-06 itself does not yet use it.
+* ``messages`` accumulates across turns (``add_messages`` reducer) and is
+  persisted via ``PostgresSaver``. ``condensed_question`` is the standalone
+  rewrite produced by the ``condense_question`` node — everything downstream
+  reads it instead of the raw ``question`` to make follow-up turns work.
 """
 
 from typing import Annotated, Any, Literal, TypedDict
@@ -26,6 +27,9 @@ class AgentState(TypedDict, total=False):
     user_role: UserRole
     company_id: int
     thread_id: str
+
+    # multi-turn: standalone rewrite of ``question`` produced by condense node
+    condensed_question: str | None
 
     # routing
     route: Route | None
@@ -46,3 +50,15 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     tool_calls: list[dict[str, Any]]
     errors: list[str]
+
+
+def effective_question(state: AgentState) -> str:
+    """Question every downstream node should consume.
+
+    Falls back to the raw ``question`` when condense produced nothing —
+    happens on the first turn or when the rewrite was skipped.
+    """
+    condensed = state.get("condensed_question")
+    if condensed:
+        return condensed
+    return state["question"]

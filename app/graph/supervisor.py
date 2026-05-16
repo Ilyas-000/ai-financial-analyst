@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.graph.llm import invoke_llm, make_llm
 from app.graph.prompts import load_two_section_prompt
-from app.graph.state import AgentState
+from app.graph.state import AgentState, effective_question
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ async def supervisor_node(state: AgentState) -> AgentState:
     system_prompt = system_template.format(
         user_role=state["user_role"], company_id=state["company_id"]
     )
-    user_prompt = user_template.format(question=state["question"])
+    user_prompt = user_template.format(question=effective_question(state))
 
     llm = make_llm("supervisor")
 

@@ -73,6 +73,26 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
 
+    # --- LangGraph checkpointer (psycopg pool sized independently of SQLAlchemy) ---
+    checkpoint_pool_min_size: int = 1
+    checkpoint_pool_max_size: int = 5
+    checkpoint_pool_open_timeout: float = 10.0
+
+    @property
+    def psycopg_dsn(self) -> str:
+        """psycopg-compatible DSN derived from ``app_database_url``.
+
+        SQLAlchemy uses the ``postgresql+asyncpg://`` prefix; psycopg needs a
+        plain ``postgresql://`` one. AsyncPostgresSaver runs through psycopg,
+        so we expose a parallel form rather than maintaining two env vars.
+        """
+        url = self.app_database_url
+        if url.startswith("postgresql+asyncpg://"):
+            return "postgresql://" + url[len("postgresql+asyncpg://") :]
+        if url.startswith("postgresql+psycopg://"):
+            return "postgresql://" + url[len("postgresql+psycopg://") :]
+        return url
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

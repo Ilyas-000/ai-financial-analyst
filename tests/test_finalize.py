@@ -3,7 +3,11 @@
 Covers the I-06 single-source paths plus the suggest_action_kind branches we
 actually build (export_report, open_ticket). prepare_act / highlight_discrepancy
 are deliberately skipped in I-06 (need entity extraction); we assert that.
+I-07 added an ``AIMessage(final_answer)`` emission so PostgresSaver persists
+the assistant turn — covered by ``test_messages_emitted_for_persistence``.
 """
+
+from langchain_core.messages import AIMessage
 
 from app.graph.finalize import finalize_node
 
@@ -136,3 +140,35 @@ def test_highlight_discrepancy_hint_skipped_until_entity_extraction():
     out = finalize_node(state)
 
     assert out["suggested_action"] is None
+
+
+def test_messages_emitted_for_persistence():
+    state = _base_state()
+    state["sql_result"] = {
+        "summary": "За Q1 потратили 1 234 567,89 ₽.",
+        "sql": "SELECT 1",
+        "rows_returned": 1,
+    }
+
+    out = finalize_node(state)
+
+    messages = out["messages"]
+    assert len(messages) == 1
+    assert isinstance(messages[0], AIMessage)
+    assert messages[0].content == out["final_answer"]
+
+
+def test_action_built_from_condensed_question():
+    """``open_ticket`` topic must use the standalone question, not the raw follow-up."""
+    state = _base_state()
+    state["question"] = "А по этому?"
+    state["condensed_question"] = "Эскалируйте расхождение по комиссии за payout от 2025-04-12."
+    state["suggest_action_kind"] = "open_ticket"
+    state["sql_result"] = {"summary": "Видим разницу 1 200 ₽.", "sql": "SELECT 1"}
+
+    out = finalize_node(state)
+
+    action = out["suggested_action"]
+    assert action is not None
+    assert "расхождение" in action["payload"]["summary"]
+    assert "payout" in action["payload"]["topic"]

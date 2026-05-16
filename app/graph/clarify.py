@@ -6,11 +6,11 @@ required scope) or when the routing parser falls back. The output replaces
 user replies with a more specific question on the next turn.
 """
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.graph.llm import invoke_llm, make_llm
 from app.graph.prompts import load_two_section_prompt
-from app.graph.state import AgentState
+from app.graph.state import AgentState, effective_question
 from app.rag.tenants import tenant_slug_for
 
 _PROMPT_FILE = "clarify.txt"
@@ -21,7 +21,7 @@ async def clarify_node(state: AgentState) -> AgentState:
     system_template, user_template = load_two_section_prompt(_PROMPT_FILE)
     system_prompt = system_template.format(user_role=state["user_role"], tenant_slug=tenant_slug)
     user_prompt = user_template.format(
-        question=state["question"],
+        question=effective_question(state),
         reasoning=state.get("route_reasoning") or "ambiguous question",
     )
 
@@ -32,4 +32,5 @@ async def clarify_node(state: AgentState) -> AgentState:
         "final_answer": answer,
         "sources": [],
         "suggested_action": None,
+        "messages": [AIMessage(content=answer)],
     }

@@ -1,9 +1,9 @@
 """FastAPI entrypoint.
 
-Owns the application lifespan (engine + Qdrant client warmup, engine dispose
-on shutdown), the chat router, and the operational ``/health`` / ``/ready``
-endpoints. Chainlit is mounted on top of this app in I-09 — the AI core
-itself never imports Chainlit.
+Owns the application lifespan (engine + Qdrant client + LangGraph
+checkpointer pool + compiled graph), the chat router, and the operational
+``/health`` / ``/ready`` endpoints. Chainlit is mounted on top of this app
+in I-09 — the AI core itself never imports Chainlit.
 """
 
 import asyncio
@@ -18,7 +18,9 @@ from sqlalchemy import text
 from app.api.routes import router as chat_router
 from app.api.schemas import ComponentStatus, ReadyResponse
 from app.config import get_settings
+from app.db.checkpointer import checkpointer_lifespan
 from app.db.session import get_engine
+from app.graph.build import build_agent_graph
 from app.rag.qdrant_store import get_qdrant_client
 
 logger = logging.getLogger(__name__)
@@ -31,17 +33,25 @@ async def lifespan(app: FastAPI):
         level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    # Warm caches; do not fail startup on transient infra hiccups — /ready
-    # surfaces real component health.
+    # Warm caches; do not fail startup on transient infra hiccups for the
+    # SQL engine and Qdrant client — /ready surfaces real component health.
     get_engine()
     get_qdrant_client()
-    logger.info("application started, env=%s", settings.app_env)
-    try:
-        yield
-    finally:
-        engine = get_engine()
-        await engine.dispose()
-        logger.info("application shutdown complete")
+
+    # The LangGraph checkpointer needs a live psycopg pool kept open for the
+    # whole app lifetime. Postgres must be reachable here — without the saver
+    # we cannot serve /api/chat, so failing fast is the right behaviour.
+    async with checkpointer_lifespan(settings) as (pool, saver):
+        app.state.checkpoint_pool = pool
+        app.state.checkpointer = saver
+        app.state.graph = build_agent_graph(checkpointer=saver)
+        logger.info("application started, env=%s", settings.app_env)
+        try:
+            yield
+        finally:
+            engine = get_engine()
+            await engine.dispose()
+            logger.info("application shutdown complete")
 
 
 app = FastAPI(

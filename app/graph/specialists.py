@@ -11,7 +11,7 @@ from typing import Any
 
 from app.graph.docs_researcher import build_docs_researcher_subgraph
 from app.graph.sql_analyst import build_sql_analyst_subgraph
-from app.graph.state import AgentState
+from app.graph.state import AgentState, effective_question
 
 
 @lru_cache(maxsize=1)
@@ -45,7 +45,7 @@ def _project_docs_result(sub_out: dict[str, Any]) -> dict[str, Any]:
 
 async def sql_analyst_node(state: AgentState) -> AgentState:
     sub_in = {
-        "question": state["question"],
+        "question": effective_question(state),
         "user_role": state["user_role"],
         "company_id": state["company_id"],
         "thread_id": state.get("thread_id"),
@@ -56,7 +56,7 @@ async def sql_analyst_node(state: AgentState) -> AgentState:
 
 async def docs_researcher_node(state: AgentState) -> AgentState:
     sub_in = {
-        "question": state["question"],
+        "question": effective_question(state),
         "user_role": state["user_role"],
         "company_id": state["company_id"],
     }

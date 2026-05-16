@@ -1,17 +1,20 @@
 """Single entrypoint into the agent graph.
 
 Used by the ``POST /api/chat`` route today and by the Chainlit UI from I-09.
-Owns the input → graph state mapping, the graceful-degradation path on LLM
+Owns the input → graph state mapping, the ``thread_id`` plumbing for
+``PostgresSaver`` multi-turn (I-07), the graceful-degradation path on LLM
 unavailability, and the ``ChatResult`` contract.
+
+The compiled graph (with checkpointer bound) is constructed by the FastAPI
+``lifespan`` and injected here. ``ChatService`` does not own checkpointer
+lifecycle — that belongs to the app entrypoint or to the CLI debug script.
 """
 
 import logging
 import uuid
 from dataclasses import dataclass, field
-from functools import lru_cache
 from typing import Any
 
-from app.graph.build import get_agent_graph
 from app.graph.llm import LLMUnavailableError
 from app.graph.state import UserRole
 
@@ -34,8 +37,8 @@ class ChatResult:
 
 
 class ChatService:
-    def __init__(self, graph: Any | None = None) -> None:
-        self._graph = graph or get_agent_graph()
+    def __init__(self, graph: Any) -> None:
+        self._graph = graph
 
     async def ask(
         self,
@@ -55,8 +58,9 @@ class ChatService:
             "errors": [],
             "tool_calls": [],
         }
+        config = {"configurable": {"thread_id": thread}}
         try:
-            final_state = await self._graph.ainvoke(initial)
+            final_state = await self._graph.ainvoke(initial, config=config)
         except LLMUnavailableError as exc:
             logger.warning("LLM unavailable: %s", exc)
             return ChatResult(
@@ -78,8 +82,3 @@ class ChatService:
             thread_id=thread,
             errors=list(final_state.get("errors") or []),
         )
-
-
-@lru_cache(maxsize=1)
-def get_chat_service() -> ChatService:
-    return ChatService()
