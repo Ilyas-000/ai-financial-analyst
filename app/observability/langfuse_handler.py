@@ -61,8 +61,15 @@ def _init_langfuse_client() -> Langfuse | None:
         host=settings.langfuse_host,
         environment=settings.app_env,
         tracing_enabled=True,
+        debug=settings.langfuse_debug,
+        timeout=settings.langfuse_timeout_seconds,
     )
-    logger.info("Langfuse client initialised against %s", settings.langfuse_host)
+    logger.info(
+        "Langfuse client initialised against %s (debug=%s, timeout=%ss)",
+        settings.langfuse_host,
+        settings.langfuse_debug,
+        settings.langfuse_timeout_seconds,
+    )
     return client
 
 
@@ -77,6 +84,24 @@ def get_langfuse_callback() -> CallbackHandler | None:
     if _init_langfuse_client() is None:
         return None
     return CallbackHandler()
+
+
+def shutdown_langfuse() -> None:
+    """Flush the export queue on application shutdown.
+
+    OTel's BatchSpanProcessor flushes on a 5s timer; without an explicit
+    flush, the last spans of a request can sit in the buffer when the user
+    Ctrl+C's the dev server. Called from the FastAPI lifespan's finally
+    block. Idempotent: a no-op if the client was never constructed.
+    """
+    client = _init_langfuse_client()
+    if client is None:
+        return
+    try:
+        client.flush()
+        logger.info("Langfuse client flushed on shutdown")
+    except Exception as exc:
+        logger.warning("Langfuse flush failed during shutdown: %s", exc)
 
 
 @contextmanager

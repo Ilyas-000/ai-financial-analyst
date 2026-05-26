@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     langfuse_host: str = "http://localhost:3000"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
+    # Debug=True dumps every span and HTTP exchange to stdout — diagnostic only.
+    langfuse_debug: bool = False
+    # OTel exporter timeout per export attempt. Default is generous because
+    # the first INSERT into a cold ClickHouse can take several seconds.
+    langfuse_timeout_seconds: int = 30
 
     # --- LangGraph checkpointer (psycopg pool sized independently of SQLAlchemy) ---
     checkpoint_pool_min_size: int = 1

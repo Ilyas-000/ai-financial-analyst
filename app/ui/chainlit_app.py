@@ -156,8 +156,7 @@ def _format_identity_banner(spec: ChatProfileSpec, tenant: TenantOption) -> str:
     return (
         f"**Идентичность:** {tenant.name} (company_id={tenant.company_id}) · "
         f"роль `{spec.role}` ({spec.role_display()}).\n\n"
-        "В production эти параметры приходят из auth-токена при входе в личный кабинет "
-        "и не меняются в рамках сессии. Чтобы сменить идентичность — **New Chat** слева, "
+        "Чтобы сменить идентичность — **New Chat** слева, "
         "выберите другой профиль."
     )
 

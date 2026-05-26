@@ -102,6 +102,32 @@ services:
     networks:
       - afa
 
+  # One-shot init: creates the `langfuse` bucket on MinIO. Langfuse v3 stores
+  # OTel event payloads in S3 before persisting them to ClickHouse and does
+  # NOT auto-provision the bucket — without this, every span ingest fails
+  # with "bucket does not exist", which surfaces as 500 to the OTel exporter
+  # in the app and an empty event_log in ClickHouse.
+  minio-init:
+    image: minio/mc:latest
+    container_name: afa-minio-init
+    profiles: ["observability"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing local/langfuse &&
+        echo "bucket 'langfuse' ready"
+    restart: "no"
+    networks:
+      - afa
+
   redis:
     image: redis:7-alpine
     container_name: afa-redis

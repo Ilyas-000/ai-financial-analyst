@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.db.checkpointer import checkpointer_lifespan
 from app.db.session import get_engine
 from app.graph.build import build_agent_graph
+from app.observability.langfuse_handler import shutdown_langfuse
 from app.rag.qdrant_store import get_qdrant_client
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ async def lifespan(app: FastAPI):
         try:
             yield
         finally:
+            shutdown_langfuse()
             engine = get_engine()
             await engine.dispose()
             logger.info("application shutdown complete")
