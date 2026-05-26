@@ -32,6 +32,10 @@ from typing import Any, Literal
 
 from app.graph.llm import FINAL_ANSWER_TAG, LLMUnavailableError
 from app.graph.state import UserRole
+from app.observability.langfuse_handler import (
+    get_langfuse_callback,
+    langfuse_trace_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +76,20 @@ class StreamChunk:
 class ChatService:
     def __init__(self, graph: Any) -> None:
         self._graph = graph
+
+    def _build_config(self, thread_id: str) -> dict[str, Any]:
+        """Compose the LangGraph ``RunnableConfig`` for one request.
+
+        ``thread_id`` drives the PostgresSaver checkpointer (I-07). When
+        Langfuse is enabled, the shared callback handler is attached here —
+        LangChain propagates it down to every nested LLM / tool runnable, so
+        nodes stay UI-framework-agnostic.
+        """
+        config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+        handler = get_langfuse_callback()
+        if handler is not None:
+            config["callbacks"] = [handler]
+        return config
 
     def _initial_state(
         self,
@@ -131,9 +149,12 @@ class ChatService:
         initial = self._initial_state(
             question=question, user_role=user_role, company_id=company_id, thread_id=thread
         )
-        config = {"configurable": {"thread_id": thread}}
+        config = self._build_config(thread)
         try:
-            final_state = await self._graph.ainvoke(initial, config=config)
+            with langfuse_trace_attributes(
+                thread_id=thread, user_role=user_role, company_id=company_id
+            ):
+                final_state = await self._graph.ainvoke(initial, config=config)
         except LLMUnavailableError as exc:
             return self._fallback_result(exc, thread)
         return self._build_result(final_state, thread)
@@ -158,28 +179,36 @@ class ChatService:
         initial = self._initial_state(
             question=question, user_role=user_role, company_id=company_id, thread_id=thread
         )
-        config = {"configurable": {"thread_id": thread}}
+        config = self._build_config(thread)
 
-        try:
-            async for event in self._graph.astream_events(initial, config=config, version="v2"):
-                if FINAL_ANSWER_TAG not in (event.get("tags") or []):
-                    continue
-                kind = event.get("event")
-                if kind == "on_chat_model_start":
-                    yield StreamChunk(kind="reset")
-                elif kind == "on_chat_model_stream":
-                    chunk = event.get("data", {}).get("chunk")
-                    text = _chunk_text(chunk)
-                    if text:
-                        yield StreamChunk(kind="token", token=text)
-        except LLMUnavailableError as exc:
-            yield StreamChunk(kind="result", result=self._fallback_result(exc, thread))
-            return
+        # propagate_attributes relies on contextvars, which survive
+        # async/await — one sync ``with`` around the whole event loop covers
+        # both the streaming run and the trailing ``aget_state`` read.
+        with langfuse_trace_attributes(
+            thread_id=thread, user_role=user_role, company_id=company_id
+        ):
+            try:
+                async for event in self._graph.astream_events(
+                    initial, config=config, version="v2"
+                ):
+                    if FINAL_ANSWER_TAG not in (event.get("tags") or []):
+                        continue
+                    kind = event.get("event")
+                    if kind == "on_chat_model_start":
+                        yield StreamChunk(kind="reset")
+                    elif kind == "on_chat_model_stream":
+                        chunk = event.get("data", {}).get("chunk")
+                        text = _chunk_text(chunk)
+                        if text:
+                            yield StreamChunk(kind="token", token=text)
+            except LLMUnavailableError as exc:
+                yield StreamChunk(kind="result", result=self._fallback_result(exc, thread))
+                return
 
-        # After streaming completes the graph has finished. Read the final
-        # values from the checkpointer (single source of truth).
-        snapshot = await self._graph.aget_state(config)
-        yield StreamChunk(kind="result", result=self._build_result(snapshot.values, thread))
+            # After streaming completes the graph has finished. Read the
+            # final values from the checkpointer (single source of truth).
+            snapshot = await self._graph.aget_state(config)
+            yield StreamChunk(kind="result", result=self._build_result(snapshot.values, thread))
 
 
 def _chunk_text(chunk: Any) -> str:
