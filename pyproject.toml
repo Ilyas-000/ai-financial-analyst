@@ -9,6 +9,9 @@ dependencies = [
     "langgraph-checkpoint-postgres>=2.0",
     "langchain-core>=0.3",
     "langchain-ollama>=0.2",
+    # Umbrella package required only by langfuse.langchain.CallbackHandler
+    # (I-10). All node code keeps importing from langchain-core directly.
+    "langchain>=1.0",
     # Vector / retrieval
     "qdrant-client>=1.12",
     "sentence-transformers>=3.2",
@@ -33,7 +36,11 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "structlog>=24.4",
-    "langfuse>=2.50",
+    # v4 SDK uses langfuse.langchain.CallbackHandler against the langchain
+    # umbrella; v2 SDK's callback path (langchain.callbacks.base) is dead in
+    # langchain v1.x, so v4 is the only working integration today. Server in
+    # docker-compose is v3 — v3 server accepts ingestion from v4 client.
+    "langfuse>=4.5,<5",
 ]
 
 [dependency-groups]
