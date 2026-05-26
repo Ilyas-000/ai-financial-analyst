@@ -40,6 +40,51 @@ def schema_for_role(user_role: str) -> str:
     return "\n\n".join(blocks)
 
 
+def format_table_for_role(table_name: str, user_role: str) -> str | None:
+    """Render a single ``-- comment\\nCREATE TABLE ...`` block for ``table_name``.
+
+    Returns ``None`` if the table is unknown or not visible to the role; sensitive
+    columns are hidden using the same rules as ``schema_for_role``.
+    """
+    if user_role not in ROLE_TABLE_ALLOWLIST:
+        return None
+    if table_name not in ROLE_TABLE_ALLOWLIST[user_role]:
+        return None
+    table = Base.metadata.tables.get(table_name)
+    if table is None:
+        return None
+    hidden = frozenset()
+    if user_role not in SENSITIVE_ALLOWED_ROLES:
+        hidden = _table_to_hidden_columns().get(table_name, frozenset())
+    return _format_table(table, hidden)
+
+
+def tables_with_column(column_name: str, user_role: str) -> list[str]:
+    """Return tables visible to ``user_role`` that have a column ``column_name``.
+
+    Sensitive columns hidden for the role are also excluded — if the LLM can't
+    see the column in its schema view, telling it "X exists in Y" would be
+    misleading.
+    """
+    if user_role not in ROLE_TABLE_ALLOWLIST:
+        return []
+    allowed = ROLE_TABLE_ALLOWLIST[user_role]
+    hidden_map = (
+        _table_to_hidden_columns()
+        if user_role not in SENSITIVE_ALLOWED_ROLES
+        else {}
+    )
+    matches: list[str] = []
+    for table_name in sorted(allowed):
+        table = Base.metadata.tables.get(table_name)
+        if table is None:
+            continue
+        hidden = hidden_map.get(table_name, frozenset())
+        if column_name in table.columns and column_name not in hidden:
+            matches.append(table_name)
+    return matches
+
+
 def _table_to_hidden_columns() -> dict[str, frozenset[str]]:
     inverted: dict[str, set[str]] = {}
     for col_name, owners in SENSITIVE_COLUMN_OWNERS.items():

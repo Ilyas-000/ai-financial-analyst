@@ -18,18 +18,25 @@ contract used by the parent graph in I-06:
          ``attempts``, ``error``
 """
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, TypedDict
 
+import sqlglot
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
+from sqlglot import exp
 
 from app.config import get_settings
 from app.graph.llm import FINAL_ANSWER_TAG
-from app.tools.schema_introspect import schema_for_role
+from app.tools.schema_introspect import (
+    format_table_for_role,
+    schema_for_role,
+    tables_with_column,
+)
 from app.tools.sql_executor import (
     ExecutionResult,
     SQLExecutionError,
@@ -103,15 +110,95 @@ def _strip_sql_fences(text: str) -> str:
     return text.strip().rstrip(";").strip()
 
 
-def _format_retry_block(last_sql: str | None, last_error: str | None) -> str:
+# Postgres error text. We rely on the *first line* (see ``_short_db_error``),
+# which is the message string of UndefinedColumnError / UndefinedTableError —
+# always exactly ``column "..." does not exist`` / ``relation "..." does not exist``.
+_UNDEFINED_COLUMN_RE = re.compile(r'column\s+"?([^\s"]+)"?\s+does not exist', re.IGNORECASE)
+_UNDEFINED_TABLE_RE = re.compile(r'relation\s+"?([^\s"]+)"?\s+does not exist', re.IGNORECASE)
+
+
+def _extract_failed_column(error: str) -> str | None:
+    """Return the bare column name from a Postgres UndefinedColumn error.
+
+    Postgres reports the column as written in the SQL — either ``"col"`` or
+    ``"alias.col"``. We strip the alias because the schema hint indexes by
+    column name, not by SQL fragment.
+    """
+    match = _UNDEFINED_COLUMN_RE.search(error)
+    if not match:
+        return None
+    raw = match.group(1)
+    return raw.rsplit(".", 1)[-1] if "." in raw else raw
+
+
+def _extract_failed_relation(error: str) -> str | None:
+    match = _UNDEFINED_TABLE_RE.search(error)
+    return match.group(1).rsplit(".", 1)[-1] if match else None
+
+
+def _tables_in_sql(sql: str) -> list[str]:
+    # sqlglot raises a small family of subclasses (ParseError, TokenError, …);
+    # the retry-hint path is best-effort, so swallow them all and fall back
+    # to an empty list rather than crash the second generate call.
+    try:
+        parsed = sqlglot.parse_one(sql, dialect="postgres")
+    except sqlglot.errors.SqlglotError:
+        return []
+    if parsed is None:
+        return []
+    return sorted({(t.name or "").lower() for t in parsed.find_all(exp.Table) if t.name})
+
+
+def _build_schema_hint(last_sql: str, last_error: str, user_role: str) -> str:
+    """Schema slice to append on retry when Postgres rejected a column/table.
+
+    The LLM otherwise sees only the raw asyncpg error and routinely keeps
+    re-trying the same wrong table — the structural fix is to re-emit the
+    real CREATE TABLE for the tables it actually referenced, plus a pointer
+    to where the missing column does live.
+    """
+    column = _extract_failed_column(last_error)
+    relation = _extract_failed_relation(last_error) if column is None else None
+    if column is None and relation is None:
+        return ""
+
+    touched = _tables_in_sql(last_sql)
+    create_blocks = [
+        block
+        for name in touched
+        if (block := format_table_for_role(name, user_role)) is not None
+    ]
+    parts: list[str] = []
+    if column is not None:
+        owners = tables_with_column(column, user_role)
+        parts.append(f'Schema hint — column "{column}" does not exist on the table you used.')
+        if create_blocks:
+            parts.append("Real schema of the tables in your previous SQL:")
+            parts.append("\n\n".join(create_blocks))
+        if owners:
+            owners_str = ", ".join(owners)
+            parts.append(f'Column "{column}" exists on: {owners_str}.')
+        else:
+            parts.append(f'No allowed table has column "{column}".')
+    else:
+        parts.append(f'Schema hint — relation "{relation}" is not an allowed table.')
+
+    return "\n".join(parts) + "\n\n"
+
+
+def _format_retry_block(
+    last_sql: str | None, last_error: str | None, user_role: str
+) -> str:
     if not last_sql or not last_error:
         return ""
+    hint = _build_schema_hint(last_sql, last_error, user_role)
     return (
         "Previous attempt failed.\n"
         "Previous SQL:\n"
         f"{last_sql}\n\n"
         "Error:\n"
         f"{last_error}\n\n"
+        f"{hint}"
         "Fix the SQL while keeping the original intent.\n\n"
     )
 
@@ -148,7 +235,11 @@ async def _generate_sql_node(state: SQLAnalystState) -> SQLAnalystState:
     user_prompt = user_template.format(
         schema=schema,
         question=state["question"],
-        retry_block=_format_retry_block(state.get("candidate_sql"), state.get("last_error")),
+        retry_block=_format_retry_block(
+            state.get("candidate_sql"),
+            state.get("last_error"),
+            state["user_role"],
+        ),
     )
     system_filled = system_prompt.format(
         user_role=state["user_role"],

@@ -22,6 +22,7 @@ Schema conventions you must follow:
 - Russian months/quarters → use Postgres `CURRENT_DATE`, `INTERVAL`, `DATE_TRUNC` (`'quarter'`, `'month'`, `'year'`).
 - The `categories` table is a code/name catalog you can JOIN on `transactions.category = categories.code`.
 - Tariff fees: join `payouts` to `tariff_rules` by `operation_type` ∈ ('payout_individual','payout_company','card_payment','currency_conversion'); the active tariff has `tariffs.status='active'`.
+- `limits` vs `tariffs` — common pitfall. `limits.period` is the recurrence enum ('day'|'week'|'month'|'quarter'|'year') on the spending-limits table. `tariffs` has NO `period` column — for the validity window of a tariff use `tariffs.effective_from` and `tariffs.effective_to` (NULL `effective_to` = open-ended). `limits` rows are scoped via `subject_type` ('company'|'employee'|'card'|'category') + `subject_id`; category-level limits store the category code in `subject_id` (e.g. 'travel_lodging').
 
 Few-shot examples for the same schema:
 
@@ -58,6 +59,23 @@ WHERE t.company_id = {company_id}
   AND t.created_at <  DATE_TRUNC('quarter', CURRENT_DATE)
 GROUP BY t.category
 ORDER BY total DESC
+LIMIT 100
+
+Q: Какой период действия у нашего активного тарифа?
+SQL:
+SELECT t.id, t.name, t.effective_from, t.effective_to, t.currency
+FROM tariffs t
+WHERE t.company_id = {company_id}
+  AND t.status = 'active'
+LIMIT 100
+
+Q: Какие лимиты по командировкам?
+SQL:
+SELECT l.subject_type, l.subject_id, l.period, l.amount, l.currency
+FROM limits l
+WHERE l.company_id = {company_id}
+  AND l.subject_type = 'category'
+  AND l.subject_id LIKE 'travel%'
 LIMIT 100
 
 === USER ===
