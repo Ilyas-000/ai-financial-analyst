@@ -3,25 +3,32 @@
 Used by the ``POST /api/chat`` route and by the Chainlit UI (I-09).
 Owns the input → graph state mapping, the ``thread_id`` plumbing for
 ``PostgresSaver`` multi-turn (I-07), the graceful-degradation path on LLM
-unavailability, the ``ChatResult`` contract, and the streaming wrapper that
-Chainlit consumes (I-09).
+unavailability, the ``ChatResult`` contract, the streaming wrapper that
+Chainlit consumes (I-09), and the I/O guardrails (I-11).
 
 The compiled graph (with checkpointer bound) is constructed by the FastAPI
 ``lifespan`` and injected here. ``ChatService`` does not own checkpointer
 lifecycle — that belongs to the app entrypoint or to the CLI debug script.
 
-Streaming model (I-09):
+Guardrails (I-11):
 
-* The UI calls ``astream_ask(...)`` and receives ``StreamChunk`` events.
-* A ``reset`` chunk arrives whenever a new ``final_answer``-tagged LLM run
-  starts; the UI clears its current buffer. This makes ``route=both``
-  consistent: specialist tokens flow first, then Finalize-combined tokens
-  replace them.
-* ``token`` chunks carry incremental tokens of the current ``final_answer``
-  LLM call.
-* A final ``result`` chunk carries the full ``ChatResult`` (answer text,
-  sources, suggested_action, route metadata) so the UI can render the
-  trailing source / action blocks once the stream is done.
+* ``apply_input_guard`` runs before graph entry. Hard blocks (over-length,
+  injection hit) short-circuit with a Russian rejection message; PII (cards,
+  INN, passport) is masked and the cleaned text is what the graph sees.
+* ``apply_output_guard`` runs on the assembled answer after the graph
+  finished. Cross-tenant leaks (foreign tenant name or INN in the answer)
+  replace the answer with a neutral notice and drop sources + action; cards
+  in the answer become ``**** <last4>``; suggested actions without
+  ``requires_confirmation=true`` are dropped.
+
+Streaming model (I-09 + I-11 R4):
+
+* Input guard runs synchronously before the graph is entered.
+* Tokens from the graph are NOT streamed live (R4, 2026-05-27): we let the
+  graph finish, run output guard on the final state, then emit a single
+  ``reset`` → ``token`` (full guarded answer) → ``result`` triple. This
+  loses live token streaming but guarantees the UI never sees text that
+  failed the cross-tenant check.
 """
 
 import logging
@@ -30,8 +37,10 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from app.graph.llm import FINAL_ANSWER_TAG, LLMUnavailableError
+from app.graph.llm import LLMUnavailableError
 from app.graph.state import UserRole
+from app.guardrails.input_guard import InputGuardError, apply_input_guard
+from app.guardrails.output_guard import apply_output_guard
 from app.observability.langfuse_handler import (
     get_langfuse_callback,
     langfuse_trace_attributes,
@@ -125,6 +134,50 @@ class ChatService:
             errors=list(state.get("errors") or []),
         )
 
+    async def _guard_result(
+        self,
+        *,
+        result: ChatResult,
+        user_company_id: int,
+        user_role: UserRole,
+        thread_id: str,
+    ) -> ChatResult:
+        """Pass the assembled answer through the output guard."""
+        guarded = await apply_output_guard(
+            answer=result.answer,
+            sources=result.sources,
+            suggested_action=result.suggested_action,
+            user_company_id=user_company_id,
+            user_role=user_role,
+            thread_id=thread_id,
+        )
+        errors = list(result.errors)
+        if guarded.rejected:
+            errors.append(f"output_blocked: {guarded.rejection_reason}")
+        if guarded.dropped_action:
+            errors.append("output_dropped_action_without_confirmation")
+        return ChatResult(
+            answer=guarded.answer,
+            sources=guarded.sources,
+            suggested_action=guarded.suggested_action,
+            route="blocked" if guarded.rejected else result.route,
+            route_reasoning=result.route_reasoning,
+            thread_id=thread_id,
+            errors=errors,
+        )
+
+    def _blocked_input_result(self, exc: InputGuardError, thread_id: str) -> ChatResult:
+        logger.warning("input guard blocked: reason=%s detail=%s", exc.reason, exc.detail)
+        return ChatResult(
+            answer=str(exc),
+            sources=[],
+            suggested_action=None,
+            route="blocked",
+            route_reasoning=None,
+            thread_id=thread_id,
+            errors=[f"input_blocked: {exc.reason}"],
+        )
+
     def _fallback_result(self, exc: Exception, thread_id: str) -> ChatResult:
         logger.warning("LLM unavailable: %s", exc)
         return ChatResult(
@@ -146,8 +199,15 @@ class ChatService:
         thread_id: str | None = None,
     ) -> ChatResult:
         thread = thread_id or str(uuid.uuid4())
+        try:
+            guard_in = apply_input_guard(question)
+        except InputGuardError as exc:
+            return self._blocked_input_result(exc, thread)
         initial = self._initial_state(
-            question=question, user_role=user_role, company_id=company_id, thread_id=thread
+            question=guard_in.question,
+            user_role=user_role,
+            company_id=company_id,
+            thread_id=thread,
         )
         config = self._build_config(thread)
         try:
@@ -157,7 +217,10 @@ class ChatService:
                 final_state = await self._graph.ainvoke(initial, config=config)
         except LLMUnavailableError as exc:
             return self._fallback_result(exc, thread)
-        return self._build_result(final_state, thread)
+        raw = self._build_result(final_state, thread)
+        return await self._guard_result(
+            result=raw, user_company_id=company_id, user_role=user_role, thread_id=thread
+        )
 
     async def astream_ask(
         self,
@@ -167,68 +230,53 @@ class ChatService:
         company_id: int,
         thread_id: str | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Stream final-answer tokens to the UI, then emit a terminal result.
+        """Stream-friendly wrapper around ``ask`` (I-11 R4: buffered output).
 
-        We listen to ``graph.astream_events`` (v2) and forward chunks of every
-        LLM run tagged ``final_answer``. ``on_chat_model_start`` becomes a
-        ``reset`` chunk so the UI can clear stale tokens from a prior
-        intermediate run (relevant for ``route=both``, where specialists fire
-        before Finalize-combined synthesises the real answer).
+        Per R4 we no longer surface live LLM tokens to the UI — the output
+        guard needs the full answer to detect cross-tenant leaks before the
+        user sees anything. We drive the graph to completion, run the guard,
+        then emit a single ``reset`` → ``token`` (full guarded answer) →
+        ``result`` triple so the existing Chainlit handler contract is
+        preserved unchanged.
         """
         thread = thread_id or str(uuid.uuid4())
+        try:
+            guard_in = apply_input_guard(question)
+        except InputGuardError as exc:
+            blocked = self._blocked_input_result(exc, thread)
+            yield StreamChunk(kind="reset")
+            yield StreamChunk(kind="token", token=blocked.answer)
+            yield StreamChunk(kind="result", result=blocked)
+            return
+
         initial = self._initial_state(
-            question=question, user_role=user_role, company_id=company_id, thread_id=thread
+            question=guard_in.question,
+            user_role=user_role,
+            company_id=company_id,
+            thread_id=thread,
         )
         config = self._build_config(thread)
 
-        # propagate_attributes relies on contextvars, which survive
-        # async/await — one sync ``with`` around the whole event loop covers
-        # both the streaming run and the trailing ``aget_state`` read.
         with langfuse_trace_attributes(
             thread_id=thread, user_role=user_role, company_id=company_id
         ):
             try:
-                async for event in self._graph.astream_events(
-                    initial, config=config, version="v2"
-                ):
-                    if FINAL_ANSWER_TAG not in (event.get("tags") or []):
-                        continue
-                    kind = event.get("event")
-                    if kind == "on_chat_model_start":
-                        yield StreamChunk(kind="reset")
-                    elif kind == "on_chat_model_stream":
-                        chunk = event.get("data", {}).get("chunk")
-                        text = _chunk_text(chunk)
-                        if text:
-                            yield StreamChunk(kind="token", token=text)
+                final_state = await self._graph.ainvoke(initial, config=config)
             except LLMUnavailableError as exc:
-                yield StreamChunk(kind="result", result=self._fallback_result(exc, thread))
+                fallback = self._fallback_result(exc, thread)
+                yield StreamChunk(kind="reset")
+                yield StreamChunk(kind="token", token=fallback.answer)
+                yield StreamChunk(kind="result", result=fallback)
                 return
 
-            # After streaming completes the graph has finished. Read the
-            # final values from the checkpointer (single source of truth).
-            snapshot = await self._graph.aget_state(config)
-            yield StreamChunk(kind="result", result=self._build_result(snapshot.values, thread))
+            raw = self._build_result(final_state, thread)
+            guarded = await self._guard_result(
+                result=raw,
+                user_company_id=company_id,
+                user_role=user_role,
+                thread_id=thread,
+            )
 
-
-def _chunk_text(chunk: Any) -> str:
-    """Extract textual content from an LLM stream chunk.
-
-    LangChain emits ``AIMessageChunk`` objects whose ``content`` is usually a
-    string; some providers return a list of content blocks. We coerce both to
-    a plain string and skip anything that isn't text.
-    """
-    if chunk is None:
-        return ""
-    content = getattr(chunk, "content", chunk)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and item.get("type") == "text":
-                parts.append(str(item.get("text") or ""))
-        return "".join(parts)
-    return str(content)
+        yield StreamChunk(kind="reset")
+        yield StreamChunk(kind="token", token=guarded.answer)
+        yield StreamChunk(kind="result", result=guarded)

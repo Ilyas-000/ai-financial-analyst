@@ -19,11 +19,16 @@ _PROMPT_FILE = "clarify.txt"
 async def clarify_node(state: AgentState) -> AgentState:
     tenant_slug = await tenant_slug_for(state["company_id"])
     system_template, user_template = load_two_section_prompt(_PROMPT_FILE)
-    system_prompt = system_template.format(user_role=state["user_role"], tenant_slug=tenant_slug)
-    user_prompt = user_template.format(
-        question=effective_question(state),
-        reasoning=state.get("route_reasoning") or "ambiguous question",
+    # ``reasoning`` is consumed by the SYSTEM section (routing hint), not USER —
+    # keep the .format calls aligned with the actual placeholders in the prompt
+    # file or LangChain raises KeyError before the LLM is ever reached.
+    reasoning = state.get("route_reasoning") or "ambiguous question"
+    system_prompt = system_template.format(
+        user_role=state["user_role"],
+        tenant_slug=tenant_slug,
+        reasoning=reasoning,
     )
+    user_prompt = user_template.format(question=effective_question(state))
 
     # ``final_answer`` tag — see ``app/graph/direct_answer.py``.
     llm = make_llm("writer", tags=[FINAL_ANSWER_TAG])
