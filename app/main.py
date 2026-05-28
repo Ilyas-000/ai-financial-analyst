@@ -7,11 +7,11 @@ in I-09 — the AI core itself never imports Chainlit.
 """
 
 import asyncio
-import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
+import structlog
 from chainlit.utils import mount_chainlit
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -24,18 +24,16 @@ from app.db.checkpointer import checkpointer_lifespan
 from app.db.session import get_engine
 from app.graph.build import build_agent_graph
 from app.observability.langfuse_handler import shutdown_langfuse
+from app.observability.logging import configure_logging
 from app.rag.qdrant_store import get_qdrant_client
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    logging.basicConfig(
-        level=settings.log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging(settings)
     # Warm caches; do not fail startup on transient infra hiccups for the
     # SQL engine and Qdrant client — /ready surfaces real component health.
     get_engine()
@@ -48,14 +46,14 @@ async def lifespan(app: FastAPI):
         app.state.checkpoint_pool = pool
         app.state.checkpointer = saver
         app.state.graph = build_agent_graph(checkpointer=saver)
-        logger.info("application started, env=%s", settings.app_env)
+        logger.info("application_started", env=settings.app_env)
         try:
             yield
         finally:
             shutdown_langfuse()
             engine = get_engine()
             await engine.dispose()
-            logger.info("application shutdown complete")
+            logger.info("application_shutdown_complete")
 
 
 app = FastAPI(

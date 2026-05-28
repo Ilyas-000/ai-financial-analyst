@@ -57,6 +57,7 @@ class SQLExecutionError(Exception):
 async def execute_guarded(
     sql: str,
     *,
+    user_id: str,
     user_role: str,
     company_id: int,
     thread_id: str | None = None,
@@ -70,6 +71,7 @@ async def execute_guarded(
     except GuardRejection as exc:
         await _write_audit(
             company_id=company_id,
+            user_id=user_id,
             user_role=user_role,
             action="sql_rejected",
             severity=exc.severity,
@@ -86,6 +88,7 @@ async def execute_guarded(
         message = _short_db_error(exc)
         await _write_audit(
             company_id=company_id,
+            user_id=user_id,
             user_role=user_role,
             action="sql_failed",
             severity="warning",
@@ -94,7 +97,7 @@ async def execute_guarded(
             details={
                 **guard_result.audit_details,
                 "error": message,
-                "elapsed_ms": elapsed_ms,
+                "duration_ms": elapsed_ms,
                 "raw_sql": sql,
                 "thread_id": thread_id,
             },
@@ -104,6 +107,7 @@ async def execute_guarded(
     elapsed_ms = int((time.monotonic() - started) * 1000)
     await _write_audit(
         company_id=company_id,
+        user_id=user_id,
         user_role=user_role,
         action=guard_result.audit_action,
         severity=guard_result.audit_severity,
@@ -111,7 +115,7 @@ async def execute_guarded(
         rows_returned=len(rows),
         details={
             **guard_result.audit_details,
-            "elapsed_ms": elapsed_ms,
+            "duration_ms": elapsed_ms,
             "raw_sql": sql,
             "thread_id": thread_id,
         },
@@ -138,6 +142,7 @@ async def _run_query(sql: str, statement_timeout_ms: int) -> list[dict[str, Any]
 async def _write_audit(
     *,
     company_id: int,
+    user_id: str,
     user_role: str,
     action: str,
     severity: str,
@@ -150,6 +155,7 @@ async def _write_audit(
         session.add(
             AuditLog(
                 company_id=company_id,
+                user_id=user_id,
                 user_role=user_role,
                 action=action,
                 sql_text=sql_text,

@@ -31,11 +31,13 @@ Streaming model (I-09 + I-11 R4):
   failed the cross-tenant check.
 """
 
-import logging
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal
+
+import structlog
 
 from app.graph.llm import LLMUnavailableError
 from app.graph.state import UserRole
@@ -46,11 +48,51 @@ from app.observability.langfuse_handler import (
     langfuse_trace_attributes,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _LLM_UNAVAILABLE_MESSAGE = (
     "Сервис AI временно недоступен. Попробуйте повторить запрос через минуту."
 )
+
+
+def synth_user_id(company_id: int, user_role: str) -> str:
+    """Build the demo-only synthetic user identity used in audit + logs.
+
+    In production this would be the authenticated user id from the auth
+    token; the demo has no real users, so we shape it as
+    ``tenant:{company_id}:{role}`` — stable per (tenant, role) but distinct
+    across them, which is enough to slice audit and traces.
+    """
+    return f"tenant:{company_id}:{user_role}"
+
+
+@contextmanager
+def _bound_log_context(
+    *,
+    thread_id: str,
+    user_id: str,
+    user_role: str,
+    company_id: int,
+):
+    """Bind per-request log context and clear it on exit.
+
+    Every log line emitted inside the ``with`` block (including from nested
+    LangGraph nodes spawned on other asyncio tasks — ``contextvars`` are
+    propagated through ``await``) carries these attributes via the
+    ``merge_contextvars`` processor configured in ``configure_logging``.
+    ``route`` is bound later by ``supervisor_node`` once the routing decision
+    is made.
+    """
+    tokens = structlog.contextvars.bind_contextvars(
+        thread_id=thread_id,
+        user_id=user_id,
+        user_role=user_role,
+        company_id=company_id,
+    )
+    try:
+        yield
+    finally:
+        structlog.contextvars.reset_contextvars(**tokens)
 
 
 @dataclass(frozen=True)
@@ -110,6 +152,7 @@ class ChatService:
     ) -> dict[str, Any]:
         return {
             "question": question,
+            "user_id": synth_user_id(company_id, user_role),
             "user_role": user_role,
             "company_id": company_id,
             "thread_id": thread_id,
@@ -138,6 +181,7 @@ class ChatService:
         self,
         *,
         result: ChatResult,
+        user_id: str,
         user_company_id: int,
         user_role: UserRole,
         thread_id: str,
@@ -147,6 +191,7 @@ class ChatService:
             answer=result.answer,
             sources=result.sources,
             suggested_action=result.suggested_action,
+            user_id=user_id,
             user_company_id=user_company_id,
             user_role=user_role,
             thread_id=thread_id,
@@ -167,7 +212,7 @@ class ChatService:
         )
 
     def _blocked_input_result(self, exc: InputGuardError, thread_id: str) -> ChatResult:
-        logger.warning("input guard blocked: reason=%s detail=%s", exc.reason, exc.detail)
+        logger.warning("input_blocked", reason=exc.reason, detail=exc.detail)
         return ChatResult(
             answer=str(exc),
             sources=[],
@@ -179,7 +224,7 @@ class ChatService:
         )
 
     def _fallback_result(self, exc: Exception, thread_id: str) -> ChatResult:
-        logger.warning("LLM unavailable: %s", exc)
+        logger.warning("llm_unavailable", error=str(exc))
         return ChatResult(
             answer=_LLM_UNAVAILABLE_MESSAGE,
             sources=[],
@@ -199,28 +244,39 @@ class ChatService:
         thread_id: str | None = None,
     ) -> ChatResult:
         thread = thread_id or str(uuid.uuid4())
-        try:
-            guard_in = apply_input_guard(question)
-        except InputGuardError as exc:
-            return self._blocked_input_result(exc, thread)
-        initial = self._initial_state(
-            question=guard_in.question,
+        user_id = synth_user_id(company_id, user_role)
+        with _bound_log_context(
+            thread_id=thread,
+            user_id=user_id,
             user_role=user_role,
             company_id=company_id,
-            thread_id=thread,
-        )
-        config = self._build_config(thread)
-        try:
-            with langfuse_trace_attributes(
-                thread_id=thread, user_role=user_role, company_id=company_id
-            ):
-                final_state = await self._graph.ainvoke(initial, config=config)
-        except LLMUnavailableError as exc:
-            return self._fallback_result(exc, thread)
-        raw = self._build_result(final_state, thread)
-        return await self._guard_result(
-            result=raw, user_company_id=company_id, user_role=user_role, thread_id=thread
-        )
+        ):
+            try:
+                guard_in = apply_input_guard(question)
+            except InputGuardError as exc:
+                return self._blocked_input_result(exc, thread)
+            initial = self._initial_state(
+                question=guard_in.question,
+                user_role=user_role,
+                company_id=company_id,
+                thread_id=thread,
+            )
+            config = self._build_config(thread)
+            try:
+                with langfuse_trace_attributes(
+                    thread_id=thread, user_role=user_role, company_id=company_id
+                ):
+                    final_state = await self._graph.ainvoke(initial, config=config)
+            except LLMUnavailableError as exc:
+                return self._fallback_result(exc, thread)
+            raw = self._build_result(final_state, thread)
+            return await self._guard_result(
+                result=raw,
+                user_id=user_id,
+                user_company_id=company_id,
+                user_role=user_role,
+                thread_id=thread,
+            )
 
     async def astream_ask(
         self,
@@ -240,43 +296,51 @@ class ChatService:
         preserved unchanged.
         """
         thread = thread_id or str(uuid.uuid4())
-        try:
-            guard_in = apply_input_guard(question)
-        except InputGuardError as exc:
-            blocked = self._blocked_input_result(exc, thread)
-            yield StreamChunk(kind="reset")
-            yield StreamChunk(kind="token", token=blocked.answer)
-            yield StreamChunk(kind="result", result=blocked)
-            return
-
-        initial = self._initial_state(
-            question=guard_in.question,
+        user_id = synth_user_id(company_id, user_role)
+        with _bound_log_context(
+            thread_id=thread,
+            user_id=user_id,
             user_role=user_role,
             company_id=company_id,
-            thread_id=thread,
-        )
-        config = self._build_config(thread)
-
-        with langfuse_trace_attributes(
-            thread_id=thread, user_role=user_role, company_id=company_id
         ):
             try:
-                final_state = await self._graph.ainvoke(initial, config=config)
-            except LLMUnavailableError as exc:
-                fallback = self._fallback_result(exc, thread)
+                guard_in = apply_input_guard(question)
+            except InputGuardError as exc:
+                blocked = self._blocked_input_result(exc, thread)
                 yield StreamChunk(kind="reset")
-                yield StreamChunk(kind="token", token=fallback.answer)
-                yield StreamChunk(kind="result", result=fallback)
+                yield StreamChunk(kind="token", token=blocked.answer)
+                yield StreamChunk(kind="result", result=blocked)
                 return
 
-            raw = self._build_result(final_state, thread)
-            guarded = await self._guard_result(
-                result=raw,
-                user_company_id=company_id,
+            initial = self._initial_state(
+                question=guard_in.question,
                 user_role=user_role,
+                company_id=company_id,
                 thread_id=thread,
             )
+            config = self._build_config(thread)
 
-        yield StreamChunk(kind="reset")
-        yield StreamChunk(kind="token", token=guarded.answer)
-        yield StreamChunk(kind="result", result=guarded)
+            with langfuse_trace_attributes(
+                thread_id=thread, user_role=user_role, company_id=company_id
+            ):
+                try:
+                    final_state = await self._graph.ainvoke(initial, config=config)
+                except LLMUnavailableError as exc:
+                    fallback = self._fallback_result(exc, thread)
+                    yield StreamChunk(kind="reset")
+                    yield StreamChunk(kind="token", token=fallback.answer)
+                    yield StreamChunk(kind="result", result=fallback)
+                    return
+
+                raw = self._build_result(final_state, thread)
+                guarded = await self._guard_result(
+                    result=raw,
+                    user_id=user_id,
+                    user_company_id=company_id,
+                    user_role=user_role,
+                    thread_id=thread,
+                )
+
+            yield StreamChunk(kind="reset")
+            yield StreamChunk(kind="token", token=guarded.answer)
+            yield StreamChunk(kind="result", result=guarded)

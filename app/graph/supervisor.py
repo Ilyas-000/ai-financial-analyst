@@ -10,9 +10,9 @@ hint that the routing decision could not be parsed.
 """
 
 import json
-import logging
 from typing import Literal
 
+import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
@@ -20,7 +20,7 @@ from app.graph.llm import invoke_llm, make_llm
 from app.graph.prompts import load_two_section_prompt
 from app.graph.state import AgentState, effective_question
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _PROMPT_FILE = "supervisor.txt"
 _FORMAT_REMINDER = (
@@ -88,19 +88,21 @@ async def supervisor_node(state: AgentState) -> AgentState:
     route = parse_route(str(response.content))
 
     if route is None:
-        logger.warning("supervisor returned non-parseable JSON, retrying with format reminder")
+        logger.warning("supervisor_parse_failed_retrying")
         retry_user = user_prompt + _FORMAT_REMINDER
         response = await invoke_llm(llm, [SystemMessage(system_prompt), HumanMessage(retry_user)])
         route = parse_route(str(response.content))
 
     if route is None:
-        logger.warning("supervisor routing fallback to clarify")
+        logger.warning("supervisor_routing_fallback_clarify")
+        structlog.contextvars.bind_contextvars(route="clarify")
         return {
             "route": "clarify",
             "route_reasoning": "failed to parse routing decision",
             "suggest_action_kind": None,
         }
 
+    structlog.contextvars.bind_contextvars(route=route.next)
     return {
         "route": route.next,
         "route_reasoning": route.reasoning,

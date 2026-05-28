@@ -479,6 +479,14 @@ class AuditLog(Base):
         nullable=False,
         comment=TENANT_ID_COMMENT,
     )
+    user_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        comment=(
+            "synthetic identity of the user that issued the action; in demo "
+            "shaped as 'tenant:{company_id}:{role}'."
+        ),
+    )
     user_role: Mapped[str] = mapped_column(
         String(50), nullable=False, comment="role of the authenticated user that issued the action"
     )

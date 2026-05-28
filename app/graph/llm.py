@@ -22,18 +22,18 @@ graceful Russian-language degradation message instead of bubbling a 500.
 """
 
 import asyncio
-import logging
 from collections.abc import Sequence
 from typing import Literal
 
 import httpx
+import structlog
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
 
 from app.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 LLMRole = Literal["supervisor", "specialist", "writer"]
 
@@ -90,7 +90,7 @@ async def invoke_llm(llm: LLMRunnable, messages: Sequence[BaseMessage]) -> BaseM
     except Exception as exc:
         if not _is_transient(exc):
             raise
-        logger.warning("llm transient error, retrying once: %s: %s", type(exc).__name__, exc)
+        logger.warning("llm_transient_error_retrying", exc_type=type(exc).__name__, error=str(exc))
         await asyncio.sleep(settings.llm_retry_backoff_seconds)
         try:
             return await llm.ainvoke(list(messages))

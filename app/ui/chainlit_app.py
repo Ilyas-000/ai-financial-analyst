@@ -20,17 +20,17 @@ that may import ``chainlit``. It must NOT import from ``app.graph``,
 through ``app.main`` — the canonical IoC handle for the app, not a global.
 """
 
-import logging
 import uuid
 from dataclasses import dataclass
 
 import chainlit as cl
+import structlog
 
 from app.main import app as fastapi_app
 from app.services.chat_service import ChatResult, ChatService
 from app.services.tenants_view import TenantOption, list_tenants_for_ui
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 _ROLES_DISPLAY: dict[str, str] = {
@@ -290,7 +290,7 @@ async def on_message(message: cl.Message) -> None:
             elif chunk.kind == "result" and chunk.result is not None:
                 result = chunk.result
     except Exception:
-        logger.exception("chat stream failed")
+        logger.exception("chat_stream_failed")
         answer_msg.content = (
             "Не удалось обработать запрос. Попробуйте ещё раз — если повторится, "
             "проверьте, что Postgres, Qdrant и Ollama запущены."

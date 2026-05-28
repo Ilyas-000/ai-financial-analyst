@@ -46,6 +46,7 @@ def _project_docs_result(sub_out: dict[str, Any]) -> dict[str, Any]:
 async def sql_analyst_node(state: AgentState) -> AgentState:
     sub_in = {
         "question": effective_question(state),
+        "user_id": state["user_id"],
         "user_role": state["user_role"],
         "company_id": state["company_id"],
         "thread_id": state.get("thread_id"),

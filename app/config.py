@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # --- App ---
     app_env: str = "development"
     log_level: str = "INFO"
+    # ``json`` is the default — structured logs ship to stdout for ingestion;
+    # ``console`` swaps in ``ConsoleRenderer`` for human-readable local runs.
+    log_format: str = "json"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
 

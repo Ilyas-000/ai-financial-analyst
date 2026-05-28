@@ -24,18 +24,18 @@ Design notes:
   in ``ChatService`` covers the whole async graph run / event stream.
 """
 
-import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import lru_cache
 
+import structlog
 from langfuse import Langfuse, propagate_attributes
 from langfuse.langchain import CallbackHandler
 
 from app.config import get_settings
 from app.graph.state import UserRole
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -50,10 +50,7 @@ def _init_langfuse_client() -> Langfuse | None:
     if not settings.enable_langfuse:
         return None
     if not (settings.langfuse_public_key and settings.langfuse_secret_key):
-        logger.warning(
-            "ENABLE_LANGFUSE=true but LANGFUSE_PUBLIC_KEY/SECRET_KEY are empty; "
-            "tracing will be skipped."
-        )
+        logger.warning("langfuse_enabled_but_keys_missing_skipping")
         return None
     client = Langfuse(
         public_key=settings.langfuse_public_key,
@@ -65,10 +62,10 @@ def _init_langfuse_client() -> Langfuse | None:
         timeout=settings.langfuse_timeout_seconds,
     )
     logger.info(
-        "Langfuse client initialised against %s (debug=%s, timeout=%ss)",
-        settings.langfuse_host,
-        settings.langfuse_debug,
-        settings.langfuse_timeout_seconds,
+        "langfuse_client_initialised",
+        host=settings.langfuse_host,
+        debug=settings.langfuse_debug,
+        timeout_seconds=settings.langfuse_timeout_seconds,
     )
     return client
 
@@ -99,9 +96,9 @@ def shutdown_langfuse() -> None:
         return
     try:
         client.flush()
-        logger.info("Langfuse client flushed on shutdown")
+        logger.info("langfuse_flushed_on_shutdown")
     except Exception as exc:
-        logger.warning("Langfuse flush failed during shutdown: %s", exc)
+        logger.warning("langfuse_flush_failed", error=str(exc))
 
 
 @contextmanager

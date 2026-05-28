@@ -15,10 +15,10 @@ Two modes:
   vs regulation tie-in). Sources from both branches are merged.
 """
 
-import logging
 from datetime import date
 from typing import Any
 
+import structlog
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.graph.llm import FINAL_ANSWER_TAG, invoke_llm, make_llm
@@ -31,7 +31,7 @@ from app.tools.draft_action_builder import (
     build_open_ticket,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _FALLBACK_ANSWER = "Не удалось сформировать ответ по вашему вопросу. Уточните формулировку."
 _COMBINED_PROMPT_FILE = "finalize_combined.txt"
@@ -90,13 +90,10 @@ def _build_action(state: AgentState) -> dict[str, Any] | None:
                 summary=question or "Подробности уточнить у пользователя.",
             )
         else:
-            logger.info(
-                "skip suggested_action build for kind=%s (needs entity extraction)",
-                kind,
-            )
+            logger.info("draft_action_skipped_needs_entities", action_kind=kind)
             return None
     except DraftActionError as exc:
-        logger.warning("draft action build failed: %s", exc)
+        logger.warning("draft_action_build_failed", error=str(exc))
         return None
     return action.as_payload()
 
@@ -130,7 +127,7 @@ async def finalize_node(state: AgentState) -> AgentState:
             docs_summary=docs_summary,
         )
         if not final_answer:
-            logger.warning("combined synthesis produced empty answer, falling back to concat")
+            logger.warning("combined_synthesis_empty_falling_back_to_concat")
             final_answer = f"{sql_summary}\n\n{docs_summary}"
     elif sql_summary or docs_summary:
         final_answer = sql_summary or docs_summary
