@@ -245,7 +245,7 @@ async def test_react_loop_recovers_after_undefined_column_with_schema_hint():
         enforced_limit=100,
     )
 
-    async def fake_execute_guarded(sql, *, user_role, company_id, thread_id):
+    async def fake_execute_guarded(sql, *, user_id, user_role, company_id, thread_id):
         if "period" in sql:
             raise SQLExecutionError(
                 'UndefinedColumnError: column "t.period" does not exist',
@@ -276,6 +276,7 @@ async def test_react_loop_recovers_after_undefined_column_with_schema_hint():
         out = await graph.ainvoke(
             {
                 "question": "Какой период действия у нашего активного тарифа?",
+                "user_id": "tenant:1:finance_manager",
                 "user_role": "finance_manager",
                 "company_id": 1,
                 "thread_id": "t-1",

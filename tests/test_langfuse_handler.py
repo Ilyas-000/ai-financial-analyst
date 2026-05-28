@@ -14,6 +14,7 @@ module level, so every test that flips settings clears both caches first.
 from collections.abc import Iterator
 
 import pytest
+import structlog.testing
 
 from app.observability import langfuse_handler
 
@@ -49,15 +50,13 @@ def test_disabled_returns_no_callback(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_disabled_context_manager_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_settings(monkeypatch, enable_langfuse=False)
-    with langfuse_handler.langfuse_trace_attributes(
-        thread_id="t", user_role="cfo", company_id=1
-    ):
+    with langfuse_handler.langfuse_trace_attributes(thread_id="t", user_role="cfo", company_id=1):
         # Just composing the CM should not raise or require Langfuse imports.
         pass
 
 
 def test_enabled_without_keys_degrades_to_disabled(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_settings(
         monkeypatch,
@@ -65,9 +64,9 @@ def test_enabled_without_keys_degrades_to_disabled(
         langfuse_public_key="",
         langfuse_secret_key="",
     )
-    with caplog.at_level("WARNING", logger=langfuse_handler.logger.name):
+    with structlog.testing.capture_logs() as logs:
         assert langfuse_handler.get_langfuse_callback() is None
-    assert any("LANGFUSE_PUBLIC_KEY" in r.message for r in caplog.records)
+    assert any(entry["event"] == "langfuse_enabled_but_keys_missing_skipping" for entry in logs)
 
 
 def test_enabled_with_keys_returns_callback(monkeypatch: pytest.MonkeyPatch) -> None:

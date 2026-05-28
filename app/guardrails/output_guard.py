@@ -21,18 +21,19 @@ integers are deliberately NOT scanned — false-positive rate on financial
 text is too high.
 """
 
-import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+
+import structlog
 
 from app.db.models import AuditLog
 from app.db.session import get_sessionmaker
 from app.guardrails.patterns import iter_card_spans, mask_card_match
 from app.guardrails.tenant_index import TenantEntry, load_tenant_index
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _REJECTION_ANSWER = (
     "Запрос отклонён системой безопасности: ответ содержал данные другой "
@@ -83,6 +84,7 @@ def _mask_cards_in_text(text: str) -> tuple[str, int]:
 async def _write_audit(
     *,
     company_id: int,
+    user_id: str,
     user_role: str,
     action: str,
     severity: str,
@@ -93,6 +95,7 @@ async def _write_audit(
         session.add(
             AuditLog(
                 company_id=company_id,
+                user_id=user_id,
                 user_role=user_role,
                 action=action,
                 sql_text=None,
@@ -109,6 +112,7 @@ async def apply_output_guard(
     answer: str,
     sources: list[dict[str, Any]],
     suggested_action: dict[str, Any] | None,
+    user_id: str,
     user_company_id: int,
     user_role: str,
     thread_id: str,
@@ -127,6 +131,7 @@ async def apply_output_guard(
     if hits:
         await _write_audit(
             company_id=user_company_id,
+            user_id=user_id,
             user_role=user_role,
             action="output_blocked_cross_tenant",
             severity="high",
@@ -136,7 +141,7 @@ async def apply_output_guard(
                 "answer_excerpt": answer[:500],
             },
         )
-        logger.warning("output guard blocked cross-tenant leak: thread=%s hits=%s", thread_id, hits)
+        logger.warning("output_blocked_cross_tenant", hits=hits)
         return OutputGuardResult(
             answer=_REJECTION_ANSWER,
             sources=[],
@@ -154,9 +159,8 @@ async def apply_output_guard(
         cleaned_action = None
         dropped_action = True
         logger.warning(
-            "output guard dropped suggested_action without confirmation: thread=%s kind=%s",
-            thread_id,
-            suggested_action.get("kind"),
+            "output_dropped_action_without_confirmation",
+            action_kind=suggested_action.get("kind"),
         )
 
     return OutputGuardResult(

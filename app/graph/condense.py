@@ -13,15 +13,14 @@ terminal nodes (Finalize / DirectAnswer / Clarify) append the matching
 ``AIMessage``.
 """
 
-import logging
-
+import structlog
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.graph.llm import invoke_llm, make_llm
 from app.graph.prompts import load_two_section_prompt
 from app.graph.state import AgentState
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _PROMPT_FILE = "condense_question.txt"
 
@@ -70,7 +69,7 @@ def _strip_wrappers(text: str) -> str:
         if first_newline != -1:
             text = text[first_newline + 1 :]
         if text.endswith("```"):
-            text = text[: -3]
+            text = text[:-3]
     text = text.strip()
     if len(text) >= 2:
         closer = _QUOTE_PAIRS.get(text[0])
@@ -125,10 +124,10 @@ async def condense_question_node(state: AgentState) -> AgentState:
     response = await invoke_llm(llm, [SystemMessage(system_template), HumanMessage(user_prompt)])
     rewritten = _strip_wrappers(str(response.content))
     if not rewritten:
-        logger.warning("condense produced empty rewrite, falling back to raw question")
+        logger.warning("condense_empty_rewrite_fallback")
         rewritten = question
     elif len(rewritten) > _REWRITE_CHAR_CAP:
-        logger.info("condense rewrite exceeded cap (%d chars), truncating", len(rewritten))
+        logger.info("condense_rewrite_truncated", length=len(rewritten))
         rewritten = _truncate(rewritten, _REWRITE_CHAR_CAP)
 
     return {

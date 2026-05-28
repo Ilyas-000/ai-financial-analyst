@@ -61,6 +61,7 @@ _EMPTY_RESULT_FALLBACK = "По заданным условиям записей 
 
 class SQLAnalystState(TypedDict, total=False):
     question: str
+    user_id: str
     user_role: str
     company_id: int
     thread_id: str | None
@@ -164,9 +165,7 @@ def _build_schema_hint(last_sql: str, last_error: str, user_role: str) -> str:
 
     touched = _tables_in_sql(last_sql)
     create_blocks = [
-        block
-        for name in touched
-        if (block := format_table_for_role(name, user_role)) is not None
+        block for name in touched if (block := format_table_for_role(name, user_role)) is not None
     ]
     parts: list[str] = []
     if column is not None:
@@ -186,9 +185,7 @@ def _build_schema_hint(last_sql: str, last_error: str, user_role: str) -> str:
     return "\n".join(parts) + "\n\n"
 
 
-def _format_retry_block(
-    last_sql: str | None, last_error: str | None, user_role: str
-) -> str:
+def _format_retry_block(last_sql: str | None, last_error: str | None, user_role: str) -> str:
     if not last_sql or not last_error:
         return ""
     hint = _build_schema_hint(last_sql, last_error, user_role)
@@ -262,6 +259,7 @@ async def _execute_node(state: SQLAnalystState) -> SQLAnalystState:
     try:
         result: ExecutionResult = await execute_guarded(
             candidate,
+            user_id=state["user_id"],
             user_role=state["user_role"],
             company_id=state["company_id"],
             thread_id=state.get("thread_id"),

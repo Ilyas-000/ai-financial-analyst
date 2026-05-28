@@ -14,6 +14,7 @@ import json
 from decimal import Decimal
 
 from app.graph.sql_analyst import build_sql_analyst_subgraph
+from app.services.chat_service import synth_user_id
 
 _VALID_ROLES = ("cfo", "finance_manager", "accountant", "auditor")
 
@@ -29,6 +30,7 @@ async def _run(question: str, role: str, company_id: int, thread_id: str | None)
     return await graph.ainvoke(
         {
             "question": question,
+            "user_id": synth_user_id(company_id, role),
             "user_role": role,
             "company_id": company_id,
             "thread_id": thread_id,
