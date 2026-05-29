@@ -14,7 +14,6 @@ import json
 
 from app.graph.docs_researcher import build_docs_researcher_subgraph
 
-
 _VALID_ROLES = ("cfo", "finance_manager", "accountant", "auditor")
 
 

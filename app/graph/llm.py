@@ -1,24 +1,18 @@
 """LLM factory and a transient-retry wrapper.
 
-Single source of truth for ``ChatOllama`` construction in I-06+ nodes
-(Supervisor / DirectAnswer / Clarify / Finalize / Condense). Existing
-subgraphs (``sql_analyst`` / ``docs_researcher``) still build their own
-``ChatOllama`` instances inline (TD-04); they tag the answer-producing call
-directly via ``with_config`` so streaming events surface to the UI.
+Single source of truth for ``ChatOllama`` construction across all graph
+nodes — Supervisor / DirectAnswer / Clarify / Finalize / Condense plus the
+``sql_analyst`` / ``docs_researcher`` subgraphs (unified in I-15, closing
+TD-05). The answer-producing call passes ``tags=[FINAL_ANSWER_TAG]`` so its
+streaming events surface to the UI.
 
-Two pieces of plumbing matter for the I-09 UI:
+UI plumbing (I-09): ``streaming=True`` makes ``astream_events`` yield
+per-token chunks; ``tags=[FINAL_ANSWER_TAG]`` marks the one call whose tokens
+Chainlit streams to the user (see ``chat_service.py`` / ``chainlit_app.py``).
 
-* ``streaming=True`` on ``ChatOllama`` makes ``astream_events`` yield
-  ``on_chat_model_stream`` chunks instead of one whole AIMessage at the end;
-  ``ainvoke`` still works the same way (it just collects the chunks).
-* ``tags=["final_answer"]`` marks the LLM call whose tokens the UI should
-  stream to the user. Chainlit subscribes to events with that tag — see
-  ``app/services/chat_service.py`` and ``app/ui/chainlit_app.py``.
-
-``invoke_llm`` performs one bounded retry on transient errors
-(timeout / connection / 5xx) with a short backoff. Anything that survives the
-retry surfaces as ``LLMUnavailableError`` so the chat service can return a
-graceful Russian-language degradation message instead of bubbling a 500.
+``invoke_llm`` does one bounded retry on transient errors (timeout /
+connection / 5xx); anything surviving it surfaces as ``LLMUnavailableError``
+so the chat service degrades gracefully instead of 500-ing.
 """
 
 import asyncio

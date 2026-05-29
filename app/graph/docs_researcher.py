@@ -1,34 +1,27 @@
 """DocsResearcher subgraph: hybrid retrieve → cross-encoder rerank → summarize.
 
-Three nodes, one linear path. The ``rerank`` node short-circuits to RRF
-pass-through when ``settings.enable_rerank`` is false (fast fallback) or when
-retrieval returned nothing. The ``summarize`` node calls Ollama with the
-two-section prompt loaded from ``prompts/docs_researcher.txt``.
+Linear path. ``rerank`` short-circuits to RRF pass-through when
+``enable_rerank`` is false or retrieval returned nothing. ``summarize`` calls
+the specialist LLM with ``prompts/docs_researcher.txt``.
 
-Subgraph contract (``DocsResearcherState``):
+Contract (``DocsResearcherState``):
     in:  ``question``, ``user_role``, ``company_id``
-    out: ``summary`` (Russian text), ``sources`` (numbered refs), ``top_chunks``
-
-Integration with the parent ``AgentState`` happens in I-06.
+    out: ``summary`` (Russian), ``sources`` (numbered refs), ``top_chunks``
 """
 
-from pathlib import Path
 from typing import TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 
 from app.config import get_settings
-from app.graph.llm import FINAL_ANSWER_TAG
+from app.graph.llm import FINAL_ANSWER_TAG, invoke_llm, make_llm
+from app.graph.prompts import load_two_section_prompt
 from app.rag.reranker import rerank_async
 from app.rag.retriever import RetrievedChunk, hybrid_search
 from app.rag.tenants import tenant_slug_for
 
-PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "docs_researcher.txt"
-
-_SYSTEM_MARKER = "=== SYSTEM ==="
-_USER_MARKER = "=== USER ==="
+_PROMPT_FILE = "docs_researcher.txt"
 
 _NO_CONTEXT_FALLBACK = (
     "В доступных регламентах ответа на этот вопрос нет. "
@@ -45,17 +38,6 @@ class DocsResearcherState(TypedDict, total=False):
     top_chunks: list[RetrievedChunk]
     summary: str
     sources: list[dict]
-
-
-def _load_prompt() -> tuple[str, str]:
-    raw = PROMPT_PATH.read_text(encoding="utf-8")
-    if _SYSTEM_MARKER not in raw or _USER_MARKER not in raw:
-        raise ValueError(
-            f"{PROMPT_PATH} must contain both {_SYSTEM_MARKER!r} and {_USER_MARKER!r}"
-        )
-    _, _, after_system = raw.partition(_SYSTEM_MARKER)
-    system_part, _, user_part = after_system.partition(_USER_MARKER)
-    return system_part.strip(), user_part.strip()
 
 
 def _format_context(chunks: list[RetrievedChunk]) -> str:
@@ -102,24 +84,15 @@ async def _rerank_node(state: DocsResearcherState) -> DocsResearcherState:
 
 
 async def _summarize_node(state: DocsResearcherState) -> DocsResearcherState:
-    settings = get_settings()
     chunks = state.get("top_chunks", [])
     if not chunks:
         return {"summary": _NO_CONTEXT_FALLBACK, "sources": []}
-    system_prompt, user_template = _load_prompt()
+    system_prompt, user_template = load_two_section_prompt(_PROMPT_FILE)
     user_prompt = user_template.format(
         question=state["question"], context=_format_context(chunks)
     )
-    llm = ChatOllama(
-        base_url=settings.ollama_base_url,
-        model=settings.llm_specialist_model,
-        temperature=0,
-        timeout=settings.llm_request_timeout,
-        streaming=True,
-    ).with_config({"tags": [FINAL_ANSWER_TAG]})
-    response = await llm.ainvoke(
-        [SystemMessage(system_prompt), HumanMessage(user_prompt)]
-    )
+    llm = make_llm("specialist", tags=[FINAL_ANSWER_TAG])
+    response = await invoke_llm(llm, [SystemMessage(system_prompt), HumanMessage(user_prompt)])
     return {
         "summary": str(response.content).strip(),
         "sources": _format_sources(chunks),

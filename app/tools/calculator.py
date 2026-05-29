@@ -1,23 +1,19 @@
 """Sandboxed calculator for the SQL Analyst / Finalize nodes.
 
-The agent calls ``calculate("expr")`` on summary numbers it already has from a
-SELECT. We do not want the LLM to reach attributes, dunders, comprehensions,
-or any builtin beyond a small whitelist, so the eval path has three guards:
+The agent calls ``calculate("expr")`` on numbers it already has from a SELECT.
+Three guards keep the LLM from reaching attributes, dunders, comprehensions,
+or arbitrary builtins:
 
-1. ``ast.parse(..., mode="eval")`` — rejects multi-statement input, assignments,
-   imports, function/class defs (these are not valid in expression mode).
-2. AST walker — only a fixed set of expression node kinds is allowed; anything
-   else (``Attribute``, ``Subscript``, ``Lambda``, ``IfExp``, comprehensions,
-   ``Compare``, ``BoolOp``, ``keyword``-args, ``Starred``, f-strings) → reject.
-3. ``asteval.Interpreter(minimal=True)`` with a stripped ``symtable`` containing
-   only ``min/max/sum/round/abs/avg``.
+1. ``ast.parse(..., mode="eval")`` — rejects statements, assignments, imports, defs.
+2. AST walker — allows only a fixed set of expression nodes; everything else
+   (``Attribute``, ``Subscript``, ``Lambda``, comprehensions, f-strings, …) rejected.
+3. ``asteval.Interpreter(minimal=True)`` with a symtable of only
+   ``min/max/sum/round/abs/avg``.
 
-The result is converted to ``Decimal`` via ``Decimal(repr(value))`` so the
-caller (which deals with money) does not see ``float`` further down the stack.
-Note: arithmetic itself runs as ``float`` inside asteval, so binary-fraction
-artifacts like ``0.1 + 0.2 == 0.30000000000000004`` can leak into the Decimal.
-This is acceptable for ratio/share/aggregation tweaks done on already-rounded
-SQL outputs; high-precision money math stays in SQL or in the FX tool.
+The result is ``Decimal(repr(value))`` so callers never see ``float``. Caveat:
+arithmetic runs as ``float`` inside asteval, so binary-fraction artifacts can
+leak into the Decimal — fine for ratios/shares on already-rounded SQL outputs;
+high-precision money math stays in SQL or the FX tool.
 """
 
 import ast

@@ -1,34 +1,16 @@
-"""Single entrypoint into the agent graph.
+"""Single entrypoint into the agent graph — used by ``POST /api/chat`` and the Chainlit UI.
 
-Used by the ``POST /api/chat`` route and by the Chainlit UI (I-09).
-Owns the input → graph state mapping, the ``thread_id`` plumbing for
-``PostgresSaver`` multi-turn (I-07), the graceful-degradation path on LLM
-unavailability, the ``ChatResult`` contract, the streaming wrapper that
-Chainlit consumes (I-09), and the I/O guardrails (I-11).
+Owns the input→state mapping, ``thread_id`` plumbing for ``PostgresSaver``
+multi-turn (I-07), graceful LLM-unavailability degradation, the
+``ChatResult`` contract, and the I/O guardrails (I-11). The compiled graph
+(checkpointer already bound) is injected by the FastAPI lifespan; this
+service does NOT own checkpointer lifecycle.
 
-The compiled graph (with checkpointer bound) is constructed by the FastAPI
-``lifespan`` and injected here. ``ChatService`` does not own checkpointer
-lifecycle — that belongs to the app entrypoint or to the CLI debug script.
-
-Guardrails (I-11):
-
-* ``apply_input_guard`` runs before graph entry. Hard blocks (over-length,
-  injection hit) short-circuit with a Russian rejection message; PII (cards,
-  INN, passport) is masked and the cleaned text is what the graph sees.
-* ``apply_output_guard`` runs on the assembled answer after the graph
-  finished. Cross-tenant leaks (foreign tenant name or INN in the answer)
-  replace the answer with a neutral notice and drop sources + action; cards
-  in the answer become ``**** <last4>``; suggested actions without
-  ``requires_confirmation=true`` are dropped.
-
-Streaming model (I-09 + I-11 R4):
-
-* Input guard runs synchronously before the graph is entered.
-* Tokens from the graph are NOT streamed live (R4, 2026-05-27): we let the
-  graph finish, run output guard on the final state, then emit a single
-  ``reset`` → ``token`` (full guarded answer) → ``result`` triple. This
-  loses live token streaming but guarantees the UI never sees text that
-  failed the cross-tenant check.
+Streaming model (I-11 R4): tokens are NOT streamed live. We run the graph to
+completion, apply the output guard on the final state, then emit a single
+``reset`` → ``token`` (full guarded answer) → ``result`` triple — losing live
+streaming but guaranteeing the UI never shows text that failed the
+cross-tenant check.
 """
 
 import uuid

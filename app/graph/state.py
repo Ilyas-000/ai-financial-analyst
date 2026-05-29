@@ -1,15 +1,9 @@
-"""Parent graph state.
+"""Parent graph state (design.md §4, I-06–I-08).
 
-Contract follows design.md §4 with adjustments grounded in plan.md / I-06–I-08:
-
-* ``route="both"`` fans out to ``sql_analyst`` and ``docs_researcher`` in
-  parallel (I-08); Finalize joins both branches.
-* ``suggest_action_kind`` is a hint emitted by Supervisor that Finalize uses to
-  build a ``suggested_action`` payload via ``draft_action_builder``.
-* ``messages`` accumulates across turns (``add_messages`` reducer) and is
-  persisted via ``PostgresSaver``. ``condensed_question`` is the standalone
-  rewrite produced by the ``condense_question`` node — everything downstream
-  reads it instead of the raw ``question`` to make follow-up turns work.
+* ``route="both"`` fans out to both specialists in parallel (I-08); Finalize joins.
+* ``messages`` accumulates across turns (``add_messages``) and is persisted via
+  ``PostgresSaver``; everything downstream reads ``condensed_question`` (the
+  standalone rewrite) rather than raw ``question`` so follow-ups resolve.
 """
 
 from typing import Annotated, Any, Literal, TypedDict

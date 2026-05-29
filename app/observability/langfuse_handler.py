@@ -1,27 +1,18 @@
-"""Langfuse callback factory and per-request trace attributes.
+"""Langfuse callback factory and per-request trace attributes (I-10).
 
-Single point of integration for I-10. ``ChatService`` attaches the callback
-returned by :func:`get_langfuse_callback` to the ``RunnableConfig`` it passes
-into the LangGraph graph; LangChain then propagates the callback down to every
-nested LLM / tool / chain runnable, so we don't have to touch each node.
+``ChatService`` attaches the callback from :func:`get_langfuse_callback` to
+the ``RunnableConfig``; LangChain propagates it to every nested runnable, so
+nodes stay integration-agnostic.
 
-Design notes:
+Non-obvious bits:
 
-* In Langfuse v4 the SDK separates "client" (HTTP / OTel exporter, lives once
-  per process) from "callback handler" (a thin LangChain bridge that talks to
-  the active client via ``get_client()``). We construct the client lazily on
-  first use; the handler itself becomes a no-op object once created — safe to
-  share across requests.
-* When ``enable_langfuse=False`` (the default per ``.env.example``) we never
-  construct the client and ``get_langfuse_callback()`` returns ``None``;
-  ``ChatService`` then simply omits the ``callbacks`` key from
-  ``RunnableConfig``. No HTTP, no background threads, no env requirements.
-* Per-request metadata (thread_id, tenant, role) is attached via Langfuse's
-  ``propagate_attributes`` context manager — it stamps the surrounding OTel
-  context, so every span emitted by the callback within the ``with`` block
-  inherits ``session_id`` / ``user_id`` / ``metadata``. ``contextvars`` carry
-  this state correctly across ``await`` boundaries, so a single sync ``with``
-  in ``ChatService`` covers the whole async graph run / event stream.
+* Langfuse v4 splits the process-wide "client" (HTTP/OTel exporter) from the
+  per-request "callback handler". We build the client lazily and share the
+  handler across requests.
+* When ``enable_langfuse=False`` (default) the client is never built and
+  ``get_langfuse_callback()`` returns ``None`` — no HTTP, threads, or env deps.
+* Per-request metadata is stamped via ``propagate_attributes``; ``contextvars``
+  carry it across ``await``, so one sync ``with`` covers the whole async run.
 """
 
 from collections.abc import Iterator

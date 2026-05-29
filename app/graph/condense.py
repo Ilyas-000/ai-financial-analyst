@@ -1,23 +1,18 @@
-"""Condense the latest user question into a standalone form.
+"""Condense the latest user question into a standalone form (I-07).
 
-First node of the parent graph in I-07 onward. With ``PostgresSaver`` the
-prior turns of the conversation live in ``state.messages``; supervisor and
-specialists only ever see ``effective_question(state)``, so this node makes
-sure that string is self-contained ("а за Q2?" → "Сколько потратили на
-командировки в Q2 2025?"). On the first turn (no prior assistant reply)
-the rewrite is skipped and ``condensed_question`` equals ``question``.
-
-The node also appends the new ``HumanMessage(question)`` to ``messages``
-so the conversation log persisted by the checkpointer stays complete; the
-terminal nodes (Finalize / DirectAnswer / Clarify) append the matching
-``AIMessage``.
+Supervisor and specialists only see ``effective_question(state)``, so this
+first node rewrites follow-ups against history to be self-contained
+("а за Q2?" → "Сколько потратили на командировки в Q2 2025?"). First turn
+skips the rewrite. It also appends the new ``HumanMessage`` to ``messages``
+(terminal nodes append the matching ``AIMessage``) to keep the checkpointed
+conversation log complete.
 """
 
 import structlog
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.graph.llm import invoke_llm, make_llm
-from app.graph.prompts import load_two_section_prompt
+from app.graph.prompts import load_two_section_prompt, strip_code_fences
 from app.graph.state import AgentState
 
 logger = structlog.get_logger(__name__)
@@ -33,7 +28,6 @@ _REWRITE_CHAR_CAP = 500
 
 
 def _has_prior_assistant_turn(messages: list) -> bool:
-    """True when the conversation log already has at least one AIMessage."""
     return any(isinstance(message, AIMessage) for message in messages)
 
 
@@ -63,14 +57,7 @@ _QUOTE_PAIRS = {'"': '"', "'": "'", "«": "»", "“": "”"}
 
 
 def _strip_wrappers(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        first_newline = text.find("\n")
-        if first_newline != -1:
-            text = text[first_newline + 1 :]
-        if text.endswith("```"):
-            text = text[:-3]
-    text = text.strip()
+    text = strip_code_fences(text)
     if len(text) >= 2:
         closer = _QUOTE_PAIRS.get(text[0])
         if closer is not None and text[-1] == closer:

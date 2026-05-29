@@ -1,23 +1,18 @@
 """Chainlit UI for the partner-portal assistant — demo layer.
 
-UI-only. The handlers resolve a Chainlit Chat Profile into an immutable
-(tenant, role) identity for the conversation, call ``ChatService.astream_ask``,
-stream the final-answer tokens into a Chainlit message, and render trailing
-``Sources`` / ``Suggested action`` blocks once the stream is done.
+UI-only. Handlers resolve a Chainlit Chat Profile into an immutable
+(tenant, role) identity, call ``ChatService.astream_ask``, stream the answer
+into a message, and render trailing ``Sources`` / ``Suggested action`` blocks.
 
-Identity model: in production the partner portal authenticates a user and the
-assistant widget receives ``(company_id, role)`` from the auth token — fixed
-for the session. We mirror that here with Chat Profiles instead of a Settings
-panel: the user picks one profile at chat start, and it's locked for the
-entire conversation. Switching identity = "New Chat" → pick a different
-profile (analogous to signing out and signing back in as a different user).
+Identity model: production passes ``(company_id, role)`` from the auth token,
+fixed per session. We mirror that with Chat Profiles locked at chat start;
+switching identity = "New Chat" → different profile.
 
-Invariant (``rules.md`` §2.1): this module is the ONLY file in the project
-that may import ``chainlit``. It must NOT import from ``app.graph``,
-``app.rag``, ``app.tools`` or ``app.db`` — everything goes through
-``app.services`` and ``app.config``. The compiled graph lives on
-``fastapi_app.state.graph`` (set by the FastAPI lifespan) and is reached
-through ``app.main`` — the canonical IoC handle for the app, not a global.
+Invariant (``rules.md`` §2.1): this is the ONLY module that may import
+``chainlit``, and it must NOT import ``app.graph`` / ``app.rag`` / ``app.tools``
+/ ``app.db`` — everything goes through ``app.services`` and ``app.config``. The
+compiled graph is reached via ``fastapi_app.state.graph`` (set by the lifespan),
+not a global.
 """
 
 import uuid

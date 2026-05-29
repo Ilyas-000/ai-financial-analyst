@@ -269,7 +269,7 @@ async def test_react_loop_recovers_after_undefined_column_with_schema_hint():
         )
 
     with (
-        patch.object(sql_analyst, "_make_llm", return_value=_FakeLLM()),
+        patch.object(sql_analyst, "make_llm", return_value=_FakeLLM()),
         patch.object(sql_analyst, "execute_guarded", AsyncMock(side_effect=fake_execute_guarded)),
     ):
         graph = build_sql_analyst_subgraph()
