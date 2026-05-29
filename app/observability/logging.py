@@ -1,25 +1,18 @@
 """Unified logging setup (structlog + stdlib bridge).
 
-The whole app talks to ``structlog.get_logger(__name__)``. ``configure_logging``
-wires three things together:
+The app logs via ``structlog.get_logger(__name__)``. ``configure_logging``:
 
-1. structlog processor chain — merges contextvars, adds level/timestamp,
-   formats exceptions; the last step is ``ProcessorFormatter.wrap_for_formatter``
-   so the actual rendering is delegated to the stdlib handler below.
-2. stdlib root handler that uses ``structlog.stdlib.ProcessorFormatter`` with
-   the same ``foreign_pre_chain``. This forces uvicorn / sqlalchemy / Langfuse
-   stdlib loggers through the same renderer, so everything in stdout shares
-   one format.
-3. Renderer choice — ``JSONRenderer`` when ``settings.log_format == "json"``,
-   ``ConsoleRenderer`` otherwise. JSON is the default; ``console`` is meant
-   for local interactive runs where a tail of plain text reads better.
+1. Builds the structlog processor chain (merge contextvars, level, timestamp,
+   exceptions) ending in ``wrap_for_formatter`` — rendering is delegated to
+   the stdlib handler.
+2. Routes the stdlib root handler through ``ProcessorFormatter`` with the same
+   ``foreign_pre_chain``, so uvicorn / sqlalchemy / Langfuse loggers share one
+   format.
+3. Picks ``JSONRenderer`` (default) vs ``ConsoleRenderer`` per ``log_format``.
 
-Per-request context (``thread_id``, ``user_id``, ``user_role``,
-``company_id``, ``route``) is bound via :func:`structlog.contextvars.bind_contextvars`
-in ``ChatService``. Because ``contextvars`` are propagated across ``await``
-boundaries, every log line emitted inside one graph run inherits the same
-attributes — including from nested LangGraph nodes and asyncio tasks the
-graph spawns.
+Per-request context bound in ``ChatService`` via ``bind_contextvars`` is
+carried across ``await``, so every line in one graph run — including nested
+LangGraph nodes — inherits ``thread_id`` / ``user_id`` / ``route`` etc.
 """
 
 import logging

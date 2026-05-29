@@ -17,7 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
 from app.graph.llm import invoke_llm, make_llm
-from app.graph.prompts import load_two_section_prompt
+from app.graph.prompts import load_two_section_prompt, strip_code_fences
 from app.graph.state import AgentState, effective_question
 
 logger = structlog.get_logger(__name__)
@@ -37,19 +37,8 @@ class _Route(BaseModel):
     ) = None
 
 
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        first_newline = text.find("\n")
-        if first_newline != -1:
-            text = text[first_newline + 1 :]
-        if text.endswith("```"):
-            text = text[: -len("```")]
-    return text.strip()
-
-
 def _extract_json_object(raw: str) -> str | None:
-    cleaned = _strip_fences(raw)
+    cleaned = strip_code_fences(raw)
     if cleaned.startswith("{") and cleaned.endswith("}"):
         return cleaned
     start = cleaned.find("{")

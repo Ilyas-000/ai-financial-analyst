@@ -1,6 +1,6 @@
-"""Compile the parent agent graph.
+"""Compile the parent agent graph (I-08).
 
-Topology (I-08):
+Topology:
 
     START → condense_question → supervisor → conditional:
         sql_analyst                  ─┐
@@ -10,19 +10,15 @@ Topology (I-08):
         direct_answer  → END
         clarify        → END
 
-The ``condense_question`` node rewrites a follow-up question into a
-standalone one using the prior turns persisted by the checkpointer, so
-supervisor and specialists keep their single-shot prompts unchanged.
+``condense_question`` rewrites a follow-up into a standalone question from the
+checkpointed history, so supervisor/specialists keep single-shot prompts.
 
-For ``route="both"`` the conditional edge fans out into ``sql_analyst`` and
-``docs_researcher`` in parallel; both branches write into different state
-keys (``sql_result`` / ``docs_result``), so the join at ``finalize`` is safe.
-Finalize then uses a writer-LLM to synthesise the combined answer.
+For ``route="both"`` the edge fans out to both specialists in parallel; they
+write distinct state keys (``sql_result`` / ``docs_result``), so the
+``finalize`` join is safe and uses a writer-LLM to synthesise the answer.
 
-The compiled graph is bound to a ``checkpointer`` so each run with a given
-``thread_id`` resumes the conversation log. Production wires the real
-``AsyncPostgresSaver`` through the FastAPI lifespan; tests can pass ``None``
-and get the legacy single-turn behaviour.
+The graph is bound to a ``checkpointer`` (real ``AsyncPostgresSaver`` via the
+FastAPI lifespan; tests may pass ``None`` for single-turn behaviour).
 """
 
 from langgraph.graph import END, START, StateGraph

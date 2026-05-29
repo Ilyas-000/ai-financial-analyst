@@ -1,18 +1,10 @@
 """Finalize node — aggregates specialist outputs into the final ``AgentState``.
 
-Two modes:
-
-* **Single-source** (``route == "sql_analyst"`` or ``"docs_researcher"``):
-  the specialist already produced a polished Russian summary in its own
-  ``interpret`` / ``summarize`` step, so Finalize does NOT call an LLM here —
-  it just picks the right summary, normalises ``sources``, and (if Supervisor
-  hinted ``suggest_action_kind``) builds a ``suggested_action`` payload via
-  ``draft_action_builder``.
-
-* **Combined** (``route == "both"``, I-08): both ``sql_result`` and
-  ``docs_result`` carry a non-empty summary. Finalize calls a writer-LLM with
-  the question + both summaries to produce one coherent Russian answer (fact
-  vs regulation tie-in). Sources from both branches are merged.
+* **Single-source**: the specialist already produced a polished summary in its
+  own ``interpret`` / ``summarize`` step, so Finalize does NOT call an LLM —
+  it picks the summary, normalises sources, and optionally builds a draft action.
+* **Combined** (``route == "both"``, I-08): both summaries present, so a
+  writer-LLM fuses them into one Russian answer; sources from both are merged.
 """
 
 from datetime import date
@@ -60,10 +52,9 @@ def _normalise_doc_sources(docs_result: dict[str, Any]) -> list[dict[str, Any]]:
 def _build_action(state: AgentState) -> dict[str, Any] | None:
     """Build a draft ``suggested_action`` from Supervisor's hint, if possible.
 
-    In I-06 we only build payloads we can fill from the question + role +
-    today's date. ``prepare_act`` and ``highlight_discrepancy`` need entities
-    we don't yet extract, so we skip them gracefully (Supervisor's hint is
-    preserved in state for tracing).
+    Only kinds fillable from question + role + date are built; ``prepare_act`` /
+    ``highlight_discrepancy`` need entity extraction we don't have yet (TD-11),
+    so they're skipped gracefully (the hint stays in state for tracing).
     """
     kind = state.get("suggest_action_kind")
     if not kind:

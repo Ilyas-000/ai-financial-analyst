@@ -23,3 +23,21 @@ def load_two_section_prompt(name: str) -> tuple[str, str]:
     _, _, after_system = raw.partition(_SYSTEM_MARKER)
     system_part, _, user_part = after_system.partition(_USER_MARKER)
     return system_part.strip(), user_part.strip()
+
+
+def strip_code_fences(text: str) -> str:
+    """Remove a single leading/trailing markdown code fence, if present.
+
+    Local 3B/7B models routinely wrap their output in ```...``` even when
+    asked for raw SQL/JSON/text. Callers that need extra trimming (a trailing
+    ``;`` for SQL, surrounding quotes for the condenser) layer that on top of
+    this base helper.
+    """
+    text = text.strip()
+    if text.startswith("```"):
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            text = text[first_newline + 1 :]
+        if text.endswith("```"):
+            text = text[: -len("```")]
+    return text.strip()

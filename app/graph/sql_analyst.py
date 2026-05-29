@@ -1,18 +1,13 @@
 """SQL Analyst subgraph: generate → execute (guarded) → interpret, with ReAct retry.
 
-Four nodes:
+Nodes: ``generate_sql`` (LLM emits one Postgres SELECT; on retry it also sees
+the prior SQL + error), ``execute`` (``execute_guarded`` → ``sql_guard`` +
+``audit_log``; guard rejections and DB errors both feed the retry loop),
+``interpret`` (second LLM call summarises rows in Russian), ``fail`` (terminal
+fallback once ``sql_max_attempts`` is exhausted). ``execute`` loops back to
+``generate_sql`` while ``attempt < max_attempts``.
 
-* ``generate_sql`` — LLM produces one Postgres SELECT given the role-scoped
-  schema and (on retries) the previous SQL + error.
-* ``execute`` — ``execute_guarded`` runs the SQL through ``sql_guard`` and
-  ``audit_log``. Guard rejections and DB errors both feed the retry loop.
-* ``interpret`` — second LLM call summarises the resulting rows in Russian.
-* ``fail`` — terminal Russian fallback used when ``sql_max_attempts`` is
-  exhausted.
-
-The retry edge from ``execute`` goes back to ``generate_sql`` while
-``attempt < max_attempts``; otherwise it routes to ``fail``. Output state
-contract used by the parent graph in I-06:
+State contract:
     in:  ``question``, ``user_role``, ``company_id``, ``thread_id``
     out: ``summary``, ``sql``, ``rows``, ``rows_returned``, ``audit``,
          ``attempts``, ``error``
@@ -21,17 +16,16 @@ contract used by the parent graph in I-06:
 import re
 from datetime import date, datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Any, TypedDict
 
 import sqlglot
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 from sqlglot import exp
 
 from app.config import get_settings
-from app.graph.llm import FINAL_ANSWER_TAG
+from app.graph.llm import FINAL_ANSWER_TAG, invoke_llm, make_llm
+from app.graph.prompts import load_two_section_prompt, strip_code_fences
 from app.tools.schema_introspect import (
     format_table_for_role,
     schema_for_role,
@@ -44,12 +38,8 @@ from app.tools.sql_executor import (
 )
 from app.tools.sql_guard import GuardRejection
 
-_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
-_GENERATE_PROMPT = _PROMPTS_DIR / "sql_analyst_generate.txt"
-_INTERPRET_PROMPT = _PROMPTS_DIR / "sql_analyst_interpret.txt"
-
-_SYSTEM_MARKER = "=== SYSTEM ==="
-_USER_MARKER = "=== USER ==="
+_GENERATE_PROMPT_FILE = "sql_analyst_generate.txt"
+_INTERPRET_PROMPT_FILE = "sql_analyst_interpret.txt"
 
 _INTERPRET_ROW_CAP = 50
 
@@ -78,37 +68,6 @@ class SQLAnalystState(TypedDict, total=False):
     summary: str
     attempts: int
     error: str | None
-
-
-def _load_prompt(path: Path) -> tuple[str, str]:
-    raw = path.read_text(encoding="utf-8")
-    if _SYSTEM_MARKER not in raw or _USER_MARKER not in raw:
-        raise ValueError(f"{path} must contain both {_SYSTEM_MARKER!r} and {_USER_MARKER!r}")
-    _, _, after_system = raw.partition(_SYSTEM_MARKER)
-    system_part, _, user_part = after_system.partition(_USER_MARKER)
-    return system_part.strip(), user_part.strip()
-
-
-def _make_llm() -> ChatOllama:
-    settings = get_settings()
-    return ChatOllama(
-        base_url=settings.ollama_base_url,
-        model=settings.llm_specialist_model,
-        temperature=0,
-        timeout=settings.llm_request_timeout,
-        streaming=True,
-    )
-
-
-def _strip_sql_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        first_newline = text.find("\n")
-        if first_newline != -1:
-            text = text[first_newline + 1 :]
-        if text.endswith("```"):
-            text = text[: -len("```")]
-    return text.strip().rstrip(";").strip()
 
 
 # Postgres error text. We rely on the *first line* (see ``_short_db_error``),
@@ -227,7 +186,7 @@ def _render_rows_table(rows: list[dict[str, Any]], cap: int) -> str:
 
 async def _generate_sql_node(state: SQLAnalystState) -> SQLAnalystState:
     attempt = int(state.get("attempt", 0)) + 1
-    system_prompt, user_template = _load_prompt(_GENERATE_PROMPT)
+    system_prompt, user_template = load_two_section_prompt(_GENERATE_PROMPT_FILE)
     schema = schema_for_role(state["user_role"])
     user_prompt = user_template.format(
         schema=schema,
@@ -242,9 +201,9 @@ async def _generate_sql_node(state: SQLAnalystState) -> SQLAnalystState:
         user_role=state["user_role"],
         company_id=state["company_id"],
     )
-    llm = _make_llm()
-    response = await llm.ainvoke([SystemMessage(system_filled), HumanMessage(user_prompt)])
-    candidate = _strip_sql_fences(str(response.content))
+    llm = make_llm("specialist")
+    response = await invoke_llm(llm, [SystemMessage(system_filled), HumanMessage(user_prompt)])
+    candidate = strip_code_fences(str(response.content)).rstrip(";").strip()
     return {
         "attempt": attempt,
         "candidate_sql": candidate,
@@ -292,7 +251,7 @@ async def _interpret_node(state: SQLAnalystState) -> SQLAnalystState:
     if rows_returned == 0:
         return {"summary": _EMPTY_RESULT_FALLBACK, "error": None}
 
-    system_prompt, user_template = _load_prompt(_INTERPRET_PROMPT)
+    system_prompt, user_template = load_two_section_prompt(_INTERPRET_PROMPT_FILE)
     user_prompt = user_template.format(
         question=state["question"],
         sql=state.get("sql", ""),
@@ -304,8 +263,8 @@ async def _interpret_node(state: SQLAnalystState) -> SQLAnalystState:
     # The interpret step produces the user-facing answer in single-source mode;
     # tagging lets Chainlit stream its tokens. In route=both the parent
     # Finalize-combined LLM is also tagged and its stream replaces this one.
-    llm = _make_llm().with_config({"tags": [FINAL_ANSWER_TAG]})
-    response = await llm.ainvoke([SystemMessage(system_filled), HumanMessage(user_prompt)])
+    llm = make_llm("specialist", tags=[FINAL_ANSWER_TAG])
+    response = await invoke_llm(llm, [SystemMessage(system_filled), HumanMessage(user_prompt)])
     return {"summary": str(response.content).strip(), "error": None}
 
 

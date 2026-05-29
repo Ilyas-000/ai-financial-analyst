@@ -1,16 +1,11 @@
-"""Draft action builder.
+"""Draft action builder (design.md §7).
 
-The agent never executes a side-effectful action itself. After the answer is
-ready, Finalize may attach a *draft* — a structured suggestion that the UI
-renders with an explicit "confirm to run" affordance.
-
-Four kinds, matching design.md §7:
-    export_report, open_ticket, prepare_act, highlight_discrepancy
-
-Every draft carries ``requires_confirmation=True`` as an invariant. The dict
-shape returned by :meth:`DraftAction.as_payload` matches the
-``suggested_action`` field of ``AgentState`` (design.md §4) — a flat
-``{kind, title, payload, requires_confirmation}`` ready to drop into state.
+The agent never executes a side-effectful action itself: Finalize may attach a
+*draft* the UI renders with an explicit "confirm to run" affordance. Four kinds
+(export_report, open_ticket, prepare_act, highlight_discrepancy); every draft
+carries ``requires_confirmation=True`` as an invariant. :meth:`DraftAction.as_payload`
+returns the flat ``{kind, title, payload, requires_confirmation}`` shape that
+matches ``AgentState.suggested_action``.
 """
 
 import re

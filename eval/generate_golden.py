@@ -1,31 +1,18 @@
 """Deterministic template generator for ``eval/golden.jsonl``.
 
-Run with ``uv run python -m eval.generate_golden``. The output is committed
-into the repo so eval results are reproducible from the same dataset version.
+Run with ``uv run python -m eval.generate_golden``. Output is committed so
+eval results are reproducible from the same dataset version.
 
-Distribution (44 cases, plan.md §10 range 35–55):
+Distribution (44 cases, plan.md §10 range 35–55): 10 SQL-only / 10 RAG-only /
+8 both / 5 answer+suggested_action / 5 clarify+direct / 6 cross-tenant
+red-team. FX and calculator cases are deferred until those tools are wired
+into the graph (TD-06).
 
-* 10 SQL-only
-* 10 RAG-only
-* 8 SQL + RAG (route=both)
-* 5 answer + suggested_action
-* 5 clarify / direct_answer
-* 6 cross-tenant red-team
-
-FX and calculator cases from plan.md §10 are deferred — those tools are not
-yet wired into the graph (see tech_debt TD on FX/calc). When wired, append
-templates here and re-generate.
-
-Each case anchors expected fields to seed/corpus data:
-
-* SQL assertions reference actual table names from ``app/db/models.py``.
-* RAG ``expected_doc_ids`` reference real front-matter doc_ids from
-  ``docs/shared/*.md`` and ``docs/tenants/*/``.
-* Cross-tenant ``forbidden_in_answer`` references actual ``companies.name``
-  and ``companies.inn`` values written in ``app/db/seed.py``.
-
-Tenant slugs are resolved to ``company_id`` by the runner at runtime — the
-dataset stays portable across seed runs that may re-issue numeric ids.
+Expected fields are anchored to real seed/corpus data — table names from
+``app/db/models.py``, doc_ids from ``docs/``, and ``companies.name`` / ``inn``
+from ``app/db/seed.py`` for the cross-tenant ``forbidden_in_answer`` checks.
+Tenant slugs are resolved to ``company_id`` by the runner at runtime, so the
+dataset stays portable across re-seeds.
 """
 
 from pathlib import Path

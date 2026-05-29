@@ -1,24 +1,19 @@
 """Output guardrail (I-11).
 
-Runs in ``ChatService`` after the graph finished, on the assembled answer
-plus its sources and (optional) ``suggested_action``. Three checks:
+Runs in ``ChatService`` after the graph finished, on the assembled answer +
+sources + optional ``suggested_action``. Three checks:
 
-1. **Cross-tenant leak** — the answer mentions another tenant's display name
-   or INN. Per design.md §8 and plan.md §1.6 this is the hard mandatory check.
-   Reaction (per R2, 2026-05-27): replace ``answer`` with a neutral Russian
-   notice, drop ``sources`` and ``suggested_action``, append an ``error``
-   marker, and write an ``audit_log`` row with ``severity="high"`` so the
-   incident is durably recorded.
-2. **PII masking** — card numbers in the answer become ``**** <last4>``.
-   Non-blocking; we just rewrite the text. Same Luhn validator as input guard.
-3. **Suggested-action invariant** — any ``suggested_action`` that lacks
-   ``requires_confirmation=True`` is dropped (defensive: builders enforce
-   this, but a hand-rolled future path could regress).
+1. **Cross-tenant leak** (hard mandatory, design.md §8) — answer mentions
+   another tenant's display name or INN. Reaction (R2): replace ``answer``
+   with a neutral notice, drop ``sources`` + ``suggested_action``, append an
+   ``error`` marker, and write an ``audit_log`` row at ``severity="high"``.
+2. **PII masking** — card numbers become ``**** <last4>`` (non-blocking).
+3. **Suggested-action invariant** — drop any action lacking
+   ``requires_confirmation=True`` (defensive; builders already enforce it).
 
-Foreign-tenant detection is conservative: name match is whole-word
-case-insensitive, INN match is exact 10/12-digit literal. Bare ``company_id``
-integers are deliberately NOT scanned — false-positive rate on financial
-text is too high.
+Foreign-tenant detection is conservative: whole-word case-insensitive name
+match, exact 10/12-digit INN. Bare ``company_id`` integers are NOT scanned —
+false-positive rate on financial text is too high.
 """
 
 import re
