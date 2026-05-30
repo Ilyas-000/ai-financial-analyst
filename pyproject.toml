@@ -71,3 +71,8 @@ select = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    # Third-party deprecations we don't control; our own stay visible.
+    "ignore:Support for class-based `config`:DeprecationWarning:traceloop.sdk.prompts.model",
+    "ignore:builtin type .* has no __module__ attribute:DeprecationWarning",
+]
