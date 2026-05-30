@@ -4,19 +4,24 @@ version = "0.1.0"
 description = "AI financial analyst for a BaaS partner — LangGraph + Postgres + Qdrant + Ollama"
 requires-python = ">=3.12"
 dependencies = [
-    # Orchestration & LLM
-    "langgraph>=0.2",
-    "langgraph-checkpoint-postgres>=2.0",
-    "langchain-core>=0.3",
-    "langchain-ollama>=0.2",
+    # Orchestration & LLM — coherent langchain v1.x ecosystem (May 2026).
+    # langchain promised "no breaking changes until 2.0" with the v1.0 GA
+    # (Oct 2025), so `<2.0` upper bound is the natural safety brake; the
+    # lower bound is the minor we actually run today, stopping silent
+    # `uv sync` drift (which previously bit us on the langfuse v3→v4
+    # upgrade and on the ragas integration attempt).
+    "langgraph>=1.2,<2.0",
+    "langgraph-checkpoint-postgres>=3.0,<4.0",
+    "langchain-core>=1.4,<2.0",
+    "langchain-ollama>=1.1,<2.0",
     # Umbrella package required only by langfuse.langchain.CallbackHandler
     # (I-10). All node code keeps importing from langchain-core directly.
-    "langchain>=1.0",
+    "langchain>=1.3,<2.0",
     # Vector / retrieval
     "qdrant-client>=1.12",
     "sentence-transformers>=3.2",
     "FlagEmbedding>=1.3",
-    "langchain-text-splitters>=0.3",
+    "langchain-text-splitters>=1.1,<2.0",
     "python-frontmatter>=1.1",
     "tiktoken>=0.8",
     # SQL / DB
@@ -33,14 +38,14 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "chainlit>=1.3",
     # Cross-cutting
-    "pydantic>=2.9",
+    "pydantic>=2.9,<3.0",
     "pydantic-settings>=2.6",
     "structlog>=24.4",
     # v4 SDK uses langfuse.langchain.CallbackHandler against the langchain
     # umbrella; v2 SDK's callback path (langchain.callbacks.base) is dead in
     # langchain v1.x, so v4 is the only working integration today. Server in
     # docker-compose is v3 — v3 server accepts ingestion from v4 client.
-    "langfuse>=4.5,<5",
+    "langfuse>=4.6,<5.0",
 ]
 
 [dependency-groups]
