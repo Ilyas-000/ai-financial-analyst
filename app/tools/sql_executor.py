@@ -135,6 +135,12 @@ async def _run_query(sql: str, statement_timeout_ms: int) -> list[dict[str, Any]
         # SET LOCAL needs an active transaction (which `session.begin()` provides).
         # Casting to int prevents string injection through the env-driven setting.
         await session.execute(text(f"SET LOCAL statement_timeout = {int(statement_timeout_ms)}"))
+        # Defense-in-depth (TD-03): pin the agent's read path to a read-only
+        # transaction so Postgres itself rejects any INSERT/UPDATE/DELETE/DDL —
+        # a third belt under `sql_guard` (app layer) and `statement_timeout`.
+        # `SET LOCAL` scopes it to this transaction only; audit writes run in a
+        # separate session (`_write_audit`) and stay read-write.
+        await session.execute(text("SET LOCAL transaction_read_only = on"))
         result = await session.execute(text(sql))
         return [dict(row) for row in result.mappings().all()]
 

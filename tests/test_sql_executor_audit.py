@@ -81,6 +81,66 @@ async def test_audit_row_carries_user_id_on_success(captured_audit: list[AuditLo
 
 
 @pytest.mark.asyncio
+async def test_read_path_pins_read_only_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TD-03 belt: the agent's read path opens a READ ONLY transaction.
+
+    Postgres then rejects any write at the engine level even if ``sql_guard``
+    were bypassed. We capture the raw statements ``_run_query`` issues and
+    assert the read-only SET lands *before* the actual query, while the audit
+    session (separate) is never made read-only.
+    """
+    statements: list[str] = []
+
+    class _RecordingSession:
+        async def __aenter__(self) -> "_RecordingSession":
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            return None
+
+        @asynccontextmanager
+        async def begin(self):
+            yield
+
+        def add(self, _instance: Any) -> None:
+            return None
+
+        async def execute(self, clause: Any, *_args: Any, **_kwargs: Any) -> Any:
+            statements.append(str(clause))
+
+            class _Result:
+                def mappings(self) -> Any:
+                    return self
+
+                def all(self) -> list[dict[str, Any]]:
+                    return []
+
+            return _Result()
+
+    def _fake_sessionmaker():
+        return lambda: _RecordingSession()
+
+    monkeypatch.setattr(sql_executor, "get_sessionmaker", _fake_sessionmaker)
+
+    await execute_guarded(
+        "SELECT id FROM transactions WHERE company_id = 1 LIMIT 10",
+        user_id="tenant:1:finance_manager",
+        user_role="finance_manager",
+        company_id=1,
+        thread_id="t-ro",
+    )
+
+    read_only_idx = next(
+        (i for i, s in enumerate(statements) if "transaction_read_only = on" in s),
+        None,
+    )
+    query_idx = next((i for i, s in enumerate(statements) if "SELECT id FROM" in s), None)
+    assert read_only_idx is not None, f"read-only SET not issued; got {statements}"
+    assert query_idx is not None
+    assert read_only_idx < query_idx, "read-only mode must be set before the query runs"
+
+
+@pytest.mark.asyncio
 async def test_audit_row_carries_user_id_on_guard_rejection(
     captured_audit: list[AuditLog],
 ) -> None:
