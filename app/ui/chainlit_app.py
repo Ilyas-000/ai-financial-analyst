@@ -24,6 +24,7 @@ import structlog
 from app.main import app as fastapi_app
 from app.services.chat_service import ChatResult, ChatService
 from app.services.tenants_view import TenantOption, list_tenants_for_ui
+from app.services.trace_view import build_trace_steps
 
 logger = structlog.get_logger(__name__)
 
@@ -241,6 +242,23 @@ async def _send_suggested_action(action: dict) -> None:
     await cl.Message(content=body).send()
 
 
+async def _send_trace(result: ChatResult) -> None:
+    """Render the agent's post-hoc trace as collapsible Chainlit steps.
+
+    Steps are reconstructed from the already-guarded ``ChatResult`` (see
+    ``app.services.trace_view``) — they appear after the answer because the
+    R4 streaming model buffers the run; this is a trace summary, not live
+    thinking. A rendering hiccup here must never sink the answer, so failures
+    are swallowed with a log.
+    """
+    try:
+        for step in build_trace_steps(result):
+            async with cl.Step(name=step.name, type=step.step_type) as cl_step:
+                cl_step.output = step.content
+    except Exception:
+        logger.exception("trace_render_failed")
+
+
 async def _flush_result(answer_msg: cl.Message, result: ChatResult) -> None:
     """Make sure the streamed message reflects the canonical result.
 
@@ -299,6 +317,7 @@ async def on_message(message: cl.Message) -> None:
         return
 
     await _flush_result(answer_msg, result)
+    await _send_trace(result)
     await _send_sources(result.sources)
     if result.suggested_action:
         await _send_suggested_action(result.suggested_action)
