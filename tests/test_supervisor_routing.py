@@ -5,7 +5,9 @@ itself is covered end-to-end via ``scripts/chat.py`` against a live Ollama
 instance.
 """
 
-from app.graph.supervisor import parse_route, route_from_state
+import pytest
+
+from app.graph.supervisor import parse_route, pre_route, route_from_state
 
 
 def test_parse_clean_json():
@@ -103,3 +105,117 @@ def test_route_from_state_returns_single_key_for_other_routes():
 def test_route_from_state_defaults_to_clarify_when_missing():
     assert route_from_state({}) == "clarify"
     assert route_from_state({"route": None}) == "clarify"
+
+
+# --- pre_route deterministic guard -----------------------------------------
+
+
+def test_pre_route_howto_goes_to_docs():
+    forced = pre_route("Как выгрузить закрывающие документы за период?")
+    assert forced is not None
+    assert forced.next == "docs_researcher"
+
+
+def test_pre_route_howto_procedure_phrasings():
+    for q in (
+        "Как оформить командировку?",
+        "Каков порядок согласования трат?",
+        "Какова процедура закрытия месяца?",
+        "Куда эскалировать инцидент?",
+    ):
+        forced = pre_route(q)
+        assert forced is not None, q
+        assert forced.next == "docs_researcher", q
+
+
+def test_pre_route_role_limit_goes_to_docs():
+    forced = pre_route("Какой месячный лимит у топ-менеджеров на корпоративные карты?")
+    assert forced is not None
+    assert forced.next == "docs_researcher"
+
+
+def test_pre_route_role_limit_for_other_roles():
+    for q in (
+        "Какой лимит у руководителей?",
+        "Какой лимит на корпкарту у бухгалтера?",
+        "Какой лимит у сотрудника на такси?",
+    ):
+        forced = pre_route(q)
+        assert forced is not None, q
+        assert forced.next == "docs_researcher", q
+
+
+def test_pre_route_our_data_limit_defers_to_llm():
+    # "лимиты заданы в системе для нашей компании" is our-data → must NOT be
+    # hijacked to docs by the role-limit rule (ourdata signal blocks it).
+    assert pre_route("Какие лимиты заданы в системе для нашей компании?") is None
+
+
+def test_pre_route_limit_without_role_defers():
+    # No role word → role-limit rule must not fire.
+    assert pre_route("Какой лимит на эту операцию?") is None
+
+
+def test_pre_route_scopeless_spend_goes_to_clarify():
+    forced = pre_route("Сколько мы потратили?")
+    assert forced is not None
+    assert forced.next == "clarify"
+
+
+def test_pre_route_scopeless_spend_stems():
+    for q in (
+        "Сколько мы израсходовали?",
+        "Каковы наши расходы?",
+        "Сколько заплатили?",
+    ):
+        forced = pre_route(q)
+        assert forced is not None, q
+        assert forced.next == "clarify", q
+
+
+def test_pre_route_spend_with_period_defers():
+    # A scope (period) is present → defer to the LLM, do not force clarify.
+    assert pre_route("Сколько потратили на командировки в Q1?") is None
+    assert pre_route("Сколько мы потратили за прошлый месяц?") is None
+    assert pre_route("Сколько потратили на рекламу в 2025?") is None
+
+
+def test_pre_route_spend_with_dimension_defers():
+    # A category/dimension counts as scope even without an explicit period.
+    assert pre_route("Сколько мы потратили на такси?") is None
+    assert pre_route("Сколько потратили по карте подрядчику?") is None
+
+
+def test_pre_route_plain_count_defers():
+    # A count of our records is sql_analyst territory — pre_route must defer.
+    assert pre_route("Сколько у нас транзакций?") is None
+    assert pre_route("Покажи наши тарифы.") is None
+
+
+def test_pre_route_does_not_hijack_both_shape():
+    # Data + rules dual ask must reach the LLM (it has a period scope).
+    assert (
+        pre_route(
+            "Сравни наши расходы по корпкартам за апрель с месячным лимитом из регламента."
+        )
+        is None
+    )
+
+
+def test_pre_route_scopeless_spend_with_rules_signal_defers():
+    # A spend verb next to a policy/rules ask is a likely `both`/`docs` case,
+    # not a scopeless figure — must defer to the LLM even without a scope token.
+    assert pre_route("Какова тарифная политика и сколько мы заплатили комиссий за payout'ы?") is None
+    assert pre_route("Сколько мы потратили и что говорит регламент?") is None
+
+
+def test_pre_route_comparison_spend_defers():
+    # A "сравни ..." comparison names a second operand — not the vague scopeless
+    # figure the clarify rule targets. Cross-tenant compares MUST reach the LLM
+    # → sql_analyst → tenant guard, not be short-circuited to clarify.
+    assert pre_route("Сравни наши расходы с расходами ACME LLC") is None
+    assert pre_route("Сравнить наши траты с прошлым годом") is None
+
+
+def test_pre_route_returns_none_for_greeting():
+    assert pre_route("Привет, как пользоваться этим помощником?") is None
