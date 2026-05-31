@@ -84,3 +84,58 @@ async def test_clarify_node_uses_default_reasoning_when_state_missing(monkeypatc
 
     system_msg = stub.last_messages[0]
     assert "ambiguous question" in system_msg.content
+
+
+def _patch_clarify_llm(monkeypatch, reply: str = "Уточните период.") -> None:
+    async def _slug(_company_id: int) -> str:
+        return "acme"
+
+    stub = _StubLLM(reply)
+
+    async def _invoke(llm, messages):
+        return await llm.ainvoke(messages)
+
+    monkeypatch.setattr(clarify_module, "tenant_slug_for", _slug)
+    monkeypatch.setattr(clarify_module, "make_llm", lambda role, *, tags=None: stub)
+    monkeypatch.setattr(clarify_module, "invoke_llm", _invoke)
+
+
+async def test_clarify_node_preserves_action_intent_as_pre_action(monkeypatch):
+    """TD-10: an action hint that arrives with route=clarify must not be dropped.
+
+    Finalize never runs on the clarify branch, so clarify itself emits a draft
+    in a ``needs_clarification`` state to keep the user's intent for the turn.
+    """
+    _patch_clarify_llm(monkeypatch)
+
+    state = {
+        "question": "Открой тикет по подозрительной активности на корпкарте",
+        "user_role": "cfo",
+        "company_id": 1,
+        "route_reasoning": "missing period",
+        "suggest_action_kind": "open_ticket",
+    }
+
+    result = await clarify_node(state)
+
+    action = result["suggested_action"]
+    assert action is not None
+    assert action["kind"] == "open_ticket"
+    assert action["state"] == "needs_clarification"
+    assert action["requires_confirmation"] is True
+    assert "подозрительной активности" in action["payload"]["question_excerpt"]
+
+
+async def test_clarify_node_no_action_when_no_hint(monkeypatch):
+    _patch_clarify_llm(monkeypatch)
+
+    state = {
+        "question": "Сколько мы потратили?",
+        "user_role": "finance_manager",
+        "company_id": 1,
+        "route_reasoning": "no scope",
+    }
+
+    result = await clarify_node(state)
+
+    assert result["suggested_action"] is None

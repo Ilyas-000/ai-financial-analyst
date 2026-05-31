@@ -3,9 +3,10 @@
 Covers:
 
 * I-06 single-source paths (sql_only / docs_only / fallback).
-* I-06 suggest_action_kind branches we actually build (export_report,
-  open_ticket); prepare_act / highlight_discrepancy are deliberately skipped
-  (need entity extraction) — we assert that.
+* I-06 suggest_action_kind branches export_report / open_ticket.
+* TD-11 deterministic entity extraction for prepare_act (counterparty + payout
+  ids) and highlight_discrepancy (expected/actual figures from the summaries);
+  both still skip gracefully when the required entities are absent.
 * I-07 ``AIMessage(final_answer)`` emission so PostgresSaver persists the
   assistant turn.
 * I-08 combined synthesis path (``route="both"``): writer-LLM is called with
@@ -134,18 +135,58 @@ async def test_open_ticket_action_built_from_hint():
     assert "расхождение" in action["payload"]["summary"]
 
 
-async def test_prepare_act_hint_skipped_until_entity_extraction():
+async def test_prepare_act_skipped_when_entities_missing():
+    # No counterparty in the question and no payout ids in the rows → skip.
     state = _base_state()
     state["suggest_action_kind"] = "prepare_act"
     state["sql_result"] = {"summary": "Сформирован список выплат.", "sql": "SELECT 1"}
 
     out = await finalize_node(state)
 
-    # Hint preserved on state for tracing, but action not built yet.
     assert out["suggested_action"] is None
 
 
-async def test_highlight_discrepancy_hint_skipped_until_entity_extraction():
+async def test_prepare_act_built_from_counterparty_and_payout_ids():
+    state = _base_state()
+    state["question"] = "По подрядчику ООО Ромашка нужны закрывающие за март"
+    state["suggest_action_kind"] = "prepare_act"
+    state["sql_result"] = {
+        "summary": "Найдено 2 выплаты подрядчику.",
+        "sql": "SELECT id FROM payouts WHERE company_id = 1",
+        "rows": [{"payout_id": 101}, {"payout_id": 102}],
+        "rows_returned": 2,
+    }
+
+    out = await finalize_node(state)
+
+    action = out["suggested_action"]
+    assert action is not None
+    assert action["kind"] == "prepare_act"
+    assert action["requires_confirmation"] is True
+    assert action["payload"]["counterparty_name"] == "ООО Ромашка"
+    assert action["payload"]["payout_ids"] == [101, 102]
+
+
+async def test_prepare_act_uses_id_column_when_no_payout_id():
+    state = _base_state()
+    state["question"] = "Закрывающие для ИП Иванов за период"
+    state["suggest_action_kind"] = "prepare_act"
+    state["sql_result"] = {
+        "summary": "Выплаты найдены.",
+        "sql": "SELECT id FROM payouts",
+        "rows": [{"id": 7}, {"id": 9}],
+        "rows_returned": 2,
+    }
+
+    out = await finalize_node(state)
+
+    action = out["suggested_action"]
+    assert action is not None
+    assert action["payload"]["counterparty_name"] == "ИП Иванов"
+    assert action["payload"]["payout_ids"] == [7, 9]
+
+
+async def test_highlight_discrepancy_skipped_when_no_figures():
     state = _base_state()
     state["suggest_action_kind"] = "highlight_discrepancy"
     state["sql_result"] = {"summary": "Нашли расхождение.", "sql": "SELECT 1"}
@@ -153,6 +194,35 @@ async def test_highlight_discrepancy_hint_skipped_until_entity_extraction():
     out = await finalize_node(state)
 
     assert out["suggested_action"] is None
+
+
+async def test_highlight_discrepancy_built_from_both_summaries():
+    """expected = docs figure, actual = SQL figure — both anchored to ₽, so a
+    bare year earlier in the sentence ("апрель 2025") is not mistaken for it."""
+    state = _base_state()
+    state["route"] = "both"
+    state["suggest_action_kind"] = "highlight_discrepancy"
+    state["sql_result"] = {
+        "summary": "За апрель 2025 расходы по корпкартам — 612 340,55 ₽.",
+        "sql": "SELECT 1",
+        "rows_returned": 1,
+    }
+    state["docs_result"] = {
+        "summary": "Месячный лимит на корпкарту — 500 000 ₽ [1].",
+        "sources": [{"n": 1, "doc_id": "policy_cards", "score": 0.94}],
+    }
+
+    with patch(
+        "app.graph.finalize.invoke_llm",
+        return_value=_StubResponse("Расходы превышают лимит."),
+    ):
+        out = await finalize_node(state)
+
+    action = out["suggested_action"]
+    assert action is not None
+    assert action["kind"] == "highlight_discrepancy"
+    assert action["payload"]["actual"] == "612 340,55"
+    assert action["payload"]["expected"] == "500 000"
 
 
 async def test_messages_emitted_for_persistence():
